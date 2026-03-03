@@ -21,6 +21,7 @@ export type Config = {
   sessions: {
     dir: string;
     maxTurns: number;
+    maxToolIterations?: number;
   };
   memory: {
     dir: string;

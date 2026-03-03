@@ -60,7 +60,7 @@ export async function runAgent(
       ? { channel: sessionKey.slice(0, colonIdx), sender: sessionKey.slice(colonIdx + 1), reply }
       : undefined;
 
-  const MAX_TOOL_ITERATIONS = 10;
+  const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 25;
   const toolCallLog: AgentResponse["toolCalls"] = [];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
