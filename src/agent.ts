@@ -264,14 +264,29 @@ export async function runAgent(
           resultText.includes("Blocked a command that accesses the network"))
       ) {
         const original = String((call.arguments as { command?: string }).command || "").trim();
+        // Save pending confirmation so the user can reply with "confirm" or
+        // the agent can later re-run the command when explicitly confirmed.
         setPendingConfirmation(sessionKey, original);
+        // Also inject a concise assistant prompt into the conversation so the
+        // model (and user) get a clear one-line confirmation UX. The user can
+        // reply with `confirm` (or `CONFIRM: <command>`) to approve execution.
         const confirmLine = original ? `CONFIRM: ${original}` : "CONFIRM: <command>";
-        return {
-          text:
-            "That command needs confirmation. Reply with:\n\n" +
-            `${confirmLine}`,
-          toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
-        };
+        const confirmPrompt = original
+          ? `I need your confirmation to run the following command:\n\n${confirmLine}\n\nReply with 'confirm' to proceed.`
+          : `I need your confirmation to run a command. Reply with 'confirm' to proceed.`;
+
+        // Push a short assistant message into the messages array so the model
+        // will see the prompt in the next iteration and can act accordingly.
+        messages.push({
+          role: "assistant",
+          content: [{ type: "text", text: confirmPrompt }],
+          api: model.api,
+          provider: provider,
+          model: "",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        });
       }
 
       const toolResult: ToolResultMessage = {

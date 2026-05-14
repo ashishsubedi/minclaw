@@ -203,37 +203,46 @@ function isLoopbackUrl(url: string): boolean {
 }
 
 function isSafeReadOnlyNetworkCommand(command: string, context?: ToolContext): boolean {
+  // Heuristic-based detection of safe read-only network commands.
+  // Allow common read-only `curl`/`wget` invocations that do not include
+  // request bodies, file redirections via shell metacharacters, or explicit
+  // non-GET methods. This avoids maintaining a huge domain whitelist.
   const trimmed = command.trim();
-  if (!/^curl\b/i.test(trimmed)) {
+  if (!/^(curl|wget)\b/i.test(trimmed)) return false;
+
+  // Reject obvious shell injection / piping / redirection patterns
+  if (/[;&|`<>]/.test(trimmed) || /\$\(/.test(trimmed)) return false;
+
+  // Disallow flags that indicate a request body or upload
+  const unsafeFlags = /\b(--data|-d|--data-raw|--data-urlencode|--form|--form-string|--upload-file)\b/i;
+  if (unsafeFlags.test(trimmed)) return false;
+
+  // If the user explicitly sets -X/--request to a non-GET method, treat as unsafe
+  const explicitMethodMatch = trimmed.match(/\b(?:-X|--request)\s+(\w+)\b/i);
+  if (explicitMethodMatch && explicitMethodMatch[1] && explicitMethodMatch[1].toUpperCase() !== "GET") {
     return false;
   }
 
-  if (/[;&|`<>]/.test(trimmed) || /\$\(/.test(trimmed)) {
-    return false;
-  }
+  // For wget, reject --post-data / --post-file
+  if (/\bwget\b/i.test(trimmed) && /\b(--post-data|--post-file)\b/i.test(trimmed)) return false;
 
-  const unsafeFlags =
-    /\s-(?:d|F|T|X)\b|--data|--data-raw|--data-urlencode|--form|--form-string|--upload-file|--request\b/i;
-  if (unsafeFlags.test(trimmed)) {
-    return false;
-  }
+  // Extract URLs
+  const urlPattern = /\bhttps?:\/\/[^\s'"|;]+/gi;
+  const urls = (trimmed.match(urlPattern) || []);
+  if (urls.length === 0) return false;
 
-  const urlPattern = /\bhttps?:\/\/[^\s]+|\bwttr\.in\b\/[^\s]+|\bwttr\.in\b|\blocalhost(?::\d+)?\b|\b127\.0\.0\.1(?::\d+)?\b|\[::1\](?::\d+)?\b/gi;
-  const urls = trimmed.match(urlPattern) ?? [];
-  if (urls.length === 0) {
-    return false;
-  }
+  // Allow loopback (localhost) unconditionally
+  const allLoopback = urls.every((u) => isLoopbackUrl(u));
+  if (allLoopback) return true;
 
-  const allLoopback = urls.every((url) => isLoopbackUrl(url));
-  if (allLoopback) {
-    return true;
-  }
+  // Avoid contacting local/internal hostnames by default
+  // (e.g., 10.x.x.x, 192.168.x.x) — treat these as not safe unless explicitly confirmed
+  const internalPattern = /^https?:\/\/(?:10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/i;
+  if (urls.some((u) => internalPattern.test(u))) return false;
 
-  if (!isTelegramContext(context)) {
-    return false;
-  }
-
-  return urls.every((url) => /^(https?:\/\/)?wttr\.in(\/|$)/i.test(url));
+  // At this point we have HTTP(s) URLs, no body flags, no injection, and no internal hosts.
+  // Treat these as safe read-only commands.
+  return true;
 }
 
 async function executeShell(args: Static<typeof ShellParams>, context?: ToolContext): Promise<ToolResult> {
