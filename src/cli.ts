@@ -14,7 +14,7 @@
  *   nakedclaw logs         — show daemon logs
  */
 
-const [subcommand] = process.argv.slice(2);
+const [subcommand, ...restArgs] = process.argv.slice(2);
 
 switch (subcommand || "chat") {
   case "chat": {
@@ -34,7 +34,7 @@ switch (subcommand || "chat") {
 
   case "start": {
     const { startDaemon } = await import("./cli/daemon-ctl.ts");
-    await startDaemon();
+    await startDaemon({ verbose: restArgs.includes("--verbose") || restArgs.includes("-v") });
     break;
   }
 
@@ -46,7 +46,7 @@ switch (subcommand || "chat") {
 
   case "restart": {
     const { restartDaemon } = await import("./cli/daemon-ctl.ts");
-    await restartDaemon();
+    await restartDaemon({ verbose: restArgs.includes("--verbose") || restArgs.includes("-v") });
     break;
   }
 
@@ -58,7 +58,10 @@ switch (subcommand || "chat") {
 
   case "logs": {
     const { showLogs } = await import("./cli/daemon-ctl.ts");
-    await showLogs();
+    const follow = restArgs.includes("--follow") || restArgs.includes("-f");
+    const linesFlag = restArgs.find((arg) => arg.startsWith("--lines="));
+    const lines = linesFlag ? parseInt(linesFlag.split("=")[1] || "", 10) : undefined;
+    await showLogs({ follow, lines: isNaN(lines as number) ? undefined : lines });
     break;
   }
 
@@ -90,11 +93,11 @@ Commands:
   setup         Configure credentials (Anthropic or OpenAI)
   connect <ch>  Connect a channel (whatsapp/wa, telegram/tg, slack)
   models        Interactive model/provider picker
-  start         Start the daemon in background
+  start         Start the daemon in background (use --verbose for extra logs)
   stop          Stop the daemon
-  restart       Restart the daemon
+  restart       Restart the daemon (use --verbose for extra logs)
   status        Show daemon status
-  logs          Show daemon logs
+  logs          Show daemon logs (use -f/--follow, --lines=N)
   sessions      Interactive session browser (TUI)
   skills        List, sync, or install skills
   help          Show this help

@@ -17,6 +17,12 @@ export type AgentResponse = {
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_CONTEXT_WINDOW = 8192;
 const DEFAULT_OLLAMA_MAX_TOKENS = 4096;
+const VERBOSE = process.env.NUDKCLAW_VERBOSE === "1";
+
+function truncateLog(text: string, maxLen = 2000): string {
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, maxLen)}... (truncated)`;
+}
 
 function normalizeOllamaBaseUrl(input?: string): string {
   const raw = (input || "").trim();
@@ -120,6 +126,18 @@ export async function runAgent(
     // Push assistant message into conversation for multi-turn tool use
     messages.push(res);
 
+    if (VERBOSE) {
+      const responseText = res.content
+        .filter((block) => block.type === "text")
+        .map((block) => ("text" in block ? block.text : ""))
+        .join("\n")
+        .trim();
+      console.log(
+        `[agent] Model response (stopReason=${res.stopReason || "unknown"}): ` +
+        `${truncateLog(responseText || "(no text)")}`
+      );
+    }
+
     if (res.stopReason !== "toolUse") {
       // Final text response — extract and return
       const text =
@@ -154,6 +172,14 @@ export async function runAgent(
         } catch {}
       }
       const result = await executeTool(call.name, call.arguments, toolContext);
+
+      if (VERBOSE) {
+        const outputText = result.content.map((c) => c.text).join("\n");
+        console.log(
+          `[agent] Tool result (${call.name}, error=${result.isError}): ` +
+          `${truncateLog(outputText || "(no output)")}`
+        );
+      }
 
       if (result.isError) {
         consecutiveToolErrors += 1;

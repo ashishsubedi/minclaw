@@ -43,7 +43,7 @@ function isDaemonRunning(): { running: boolean; pid?: number } {
   }
 }
 
-export async function startDaemon(): Promise<void> {
+export async function startDaemon(options?: { verbose?: boolean }): Promise<void> {
   ensureStateDir();
   const paths = getPaths();
 
@@ -63,8 +63,9 @@ export async function startDaemon(): Promise<void> {
 
   // Spawn detached daemon via nohup so it survives parent exit
   // CWD must be project root so Bun loads .env and relative paths resolve
+  const verboseEnv = options?.verbose ? "env NUDKCLAW_VERBOSE=1 " : "";
   const proc = Bun.spawn(
-    ["sh", "-c", `nohup bun run "${daemonEntry}" >> "${paths.logFile}" 2>&1 &`],
+    ["sh", "-c", `nohup ${verboseEnv}bun run "${daemonEntry}" >> "${paths.logFile}" 2>&1 &`],
     { cwd: projectRoot, stdio: ["ignore", "ignore", "ignore"] }
   );
 
@@ -114,12 +115,12 @@ export async function stopDaemon(): Promise<void> {
   console.log(`${GREEN}Daemon killed.${RESET}`);
 }
 
-export async function restartDaemon(): Promise<void> {
+export async function restartDaemon(options?: { verbose?: boolean }): Promise<void> {
   const status = isDaemonRunning();
   if (status.running) {
     await stopDaemon();
   }
-  await startDaemon();
+  await startDaemon(options);
 }
 
 export async function showStatus(): Promise<void> {
@@ -218,15 +219,25 @@ function formatUptime(ms: number): string {
   return `${h}h ${m}m`;
 }
 
-export async function showLogs(): Promise<void> {
+export async function showLogs(options?: { follow?: boolean; lines?: number }): Promise<void> {
   const { logFile } = getPaths();
   if (!existsSync(logFile)) {
     console.log(`${DIM}No log file found.${RESET}`);
     return;
   }
+  const tailLines = Math.max(1, options?.lines ?? 50);
+
+  if (options?.follow) {
+    const proc = Bun.spawn(["sh", "-c", `tail -n ${tailLines} -f "${logFile}"`], {
+      stdio: ["ignore", "inherit", "inherit"],
+    });
+    await proc.exited;
+    return;
+  }
+
   const content = readFileSync(logFile, "utf-8");
   const lines = content.split("\n");
-  // Show last 50 lines
-  const tail = lines.slice(-50).join("\n");
+  // Show last N lines
+  const tail = lines.slice(-tailLines).join("\n");
   console.log(tail);
 }
