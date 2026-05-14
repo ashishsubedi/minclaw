@@ -90,9 +90,9 @@ Usage: nakedclaw [command]
 
 Commands:
   (none)        Chat with the agent (connects to daemon)
-  setup         Configure credentials (Anthropic or OpenAI)
+  setup         Configure credentials (Anthropic, OpenAI, Codex, or GitHub Copilot)
   connect <ch>  Connect a channel (whatsapp/wa, telegram/tg, slack)
-  models        Interactive model/provider picker
+  models        Interactive model/provider picker (includes GitHub Copilot)
   start         Start the daemon in background (use --verbose for extra logs)
   stop          Stop the daemon
   restart       Restart the daemon (use --verbose for extra logs)

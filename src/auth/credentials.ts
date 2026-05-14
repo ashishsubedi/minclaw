@@ -1,7 +1,7 @@
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import { refreshOpenAICodexToken } from "@mariozechner/pi-ai";
+import { getOAuthApiKey } from "@mariozechner/pi-ai";
 
 export type OAuthCredentials = {
   accessToken: string;
@@ -18,11 +18,19 @@ export type OpenAICodexCredentials = {
   accountId: string;
 };
 
+export type GitHubCopilotCredentials = {
+  access: string;
+  refresh: string;
+  expires: number; // epoch ms
+  [key: string]: unknown;
+};
+
 /** A single provider's credential (the map key IS the provider) */
 export type ProviderCredential =
   | { method: "api_key"; apiKey: string }
   | { method: "oauth"; oauth: OAuthCredentials }
-  | { method: "oauth"; openaiCodex: OpenAICodexCredentials };
+  | { method: "oauth"; openaiCodex: OpenAICodexCredentials }
+  | { method: "oauth"; githubCopilot: GitHubCopilotCredentials };
 
 /** Map of provider → credential */
 export type CredentialsStore = Record<string, ProviderCredential>;
@@ -72,6 +80,63 @@ function migrateOldCredentials(old: Credentials): CredentialsStore {
     return { [provider]: { method: "oauth", openaiCodex: old.openaiCodex } };
   }
   return {};
+}
+
+function getEnvKey(provider: string): string | undefined {
+  if (provider === "anthropic") return process.env.ANTHROPIC_API_KEY?.trim();
+  if (provider === "openai") return process.env.OPENAI_API_KEY?.trim();
+  if (provider === "openai-codex") return process.env.OPENAI_API_KEY?.trim();
+  if (provider === "github-copilot") {
+    return (
+      process.env.COPILOT_GITHUB_TOKEN?.trim() ||
+      process.env.GH_TOKEN?.trim() ||
+      process.env.GITHUB_TOKEN?.trim()
+    );
+  }
+  if (provider === "ollama") return process.env.OLLAMA_API_KEY?.trim();
+  return undefined;
+}
+
+type OAuthTokenCredentials = {
+  access: string;
+  refresh: string;
+  expires: number;
+  [key: string]: unknown;
+};
+
+function saveOAuthCredentials(
+  provider: "openai-codex" | "github-copilot",
+  credentials: OAuthTokenCredentials
+): void {
+  if (provider === "openai-codex") {
+    saveProviderCredential(provider, {
+      method: "oauth",
+      openaiCodex: credentials as OpenAICodexCredentials,
+    });
+    return;
+  }
+
+  saveProviderCredential(provider, {
+    method: "oauth",
+    githubCopilot: credentials as GitHubCopilotCredentials,
+  });
+}
+
+async function refreshOAuthCredentials(
+  provider: "openai-codex" | "github-copilot",
+  credentials: OAuthTokenCredentials
+): Promise<string> {
+  const result = await getOAuthApiKey(provider, { [provider]: credentials });
+
+  if (!result) {
+    throw new Error(`OAuth token refresh failed for ${provider}. Run: nakedclaw setup`);
+  }
+
+  if (result.newCredentials) {
+    saveOAuthCredentials(provider, result.newCredentials as OAuthTokenCredentials);
+  }
+
+  return result.apiKey;
 }
 
 /** Load all provider credentials. Auto-migrates old single-credential format. */
@@ -157,30 +222,6 @@ async function refreshAnthropicIfNeeded(
   return updated.accessToken;
 }
 
-/** Refresh an OpenAI Codex token if expired. Returns the (possibly refreshed) access token. */
-async function refreshOpenAICodexIfNeeded(
-  provider: string,
-  codex: OpenAICodexCredentials
-): Promise<string> {
-  if (Date.now() < codex.expires - 5 * 60_000) {
-    return codex.access;
-  }
-
-  console.log("[auth] Refreshing OpenAI Codex token...");
-
-  const refreshed = await refreshOpenAICodexToken(codex.refresh);
-
-  const updated: OpenAICodexCredentials = {
-    access: refreshed.access,
-    refresh: refreshed.refresh,
-    expires: refreshed.expires,
-    accountId: codex.accountId,
-  };
-
-  saveProviderCredential(provider, { method: "oauth", openaiCodex: updated });
-  return updated.access;
-}
-
 /**
  * Get an API key for the given provider.
  * Checks env vars first, then stored credentials.
@@ -188,19 +229,8 @@ async function refreshOpenAICodexIfNeeded(
  */
 export async function getApiKeyForProvider(provider: string): Promise<string> {
   // Env vars take priority
-  if (provider === "anthropic" || provider === "openai") {
-    const envVar = provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY";
-    const envKey = process.env[envVar];
-    if (envKey) return envKey;
-  }
-  if (provider === "openai-codex") {
-    const envKey = process.env.OPENAI_API_KEY;
-    if (envKey) return envKey;
-  }
-  if (provider === "ollama") {
-    const envKey = process.env.OLLAMA_API_KEY;
-    if (envKey) return envKey;
-  }
+  const envKey = getEnvKey(provider);
+  if (envKey) return envKey;
 
   const store = loadAllCredentials();
   const cred = store[provider];
@@ -216,14 +246,25 @@ export async function getApiKeyForProvider(provider: string): Promise<string> {
     return cred.apiKey;
   }
 
+  if (provider === "openai-codex") {
+    const codex = "openaiCodex" in cred ? cred.openaiCodex : undefined;
+    if (!codex) {
+      throw new Error("Invalid credential state. Run: nakedclaw setup");
+    }
+    return await refreshOAuthCredentials("openai-codex", codex);
+  }
+
+  if (provider === "github-copilot") {
+    const githubCopilot = "githubCopilot" in cred ? cred.githubCopilot : undefined;
+    if (!githubCopilot) {
+      throw new Error("Invalid credential state. Run: nakedclaw setup");
+    }
+    return await refreshOAuthCredentials("github-copilot", githubCopilot);
+  }
+
   // OAuth — Anthropic
   if ("oauth" in cred) {
     return refreshAnthropicIfNeeded(provider, cred.oauth);
-  }
-
-  // OAuth — OpenAI Codex
-  if ("openaiCodex" in cred) {
-    return refreshOpenAICodexIfNeeded(provider, cred.openaiCodex);
   }
 
   throw new Error("Invalid credential state. Run: nakedclaw setup");

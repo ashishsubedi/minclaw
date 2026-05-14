@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { createInterface } from "readline";
 import JSON5 from "json5";
+import { getModels } from "@mariozechner/pi-ai";
 import { loadConfig } from "../config.ts";
 import { loadAllCredentials } from "../auth/credentials.ts";
 
@@ -39,6 +40,7 @@ export const MODELS: Record<string, string[]> = {
     "gpt-5.2-codex",
     "gpt-5.1-codex-max",
   ],
+  "github-copilot": [],
   ollama: [],
 };
 
@@ -46,10 +48,18 @@ const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   "openai-codex": "OpenAI Codex",
+  "github-copilot": "GitHub Copilot",
   ollama: "Ollama",
 };
 
-const PROVIDERS_REQUIRING_CREDENTIALS = new Set(["anthropic", "openai", "openai-codex"]);
+const PROVIDERS_REQUIRING_CREDENTIALS = new Set(["anthropic", "openai", "openai-codex", "github-copilot"]);
+
+function getSelectableModels(provider: string): string[] {
+  if (provider === "github-copilot") {
+    return getModels("github-copilot").map((model) => model.id);
+  }
+  return MODELS[provider] || [];
+}
 
 function normalizeOllamaBaseUrl(input: string): string {
   const trimmed = input.trim();
@@ -131,6 +141,13 @@ async function setModel(spec: string): Promise<void> {
     process.exit(1);
   }
 
+  const availableModels = getSelectableModels(provider);
+  if (provider !== "ollama" && availableModels.length > 0 && !availableModels.includes(name)) {
+    console.error(`Unknown model for ${provider}: ${name}`);
+    console.error(`Available: ${availableModels.join(", ")}`);
+    process.exit(1);
+  }
+
   if (provider === "ollama") {
     const config = loadConfig();
     const baseUrl = normalizeOllamaBaseUrl(config.model.baseUrl || DEFAULT_OLLAMA_BASE_URL);
@@ -174,7 +191,7 @@ async function interactivePick(): Promise<void> {
   }
 
   const selectedProvider = providers[providerIdx]!;
-  const models = MODELS[selectedProvider]!;
+  const models = getSelectableModels(selectedProvider);
 
   if (selectedProvider === "ollama") {
     const defaultModel = selectedProvider === currentProvider ? currentModel : "";

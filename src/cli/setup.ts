@@ -5,7 +5,7 @@ import {
   removeProviderCredential,
   type CredentialsStore,
 } from "../auth/credentials.ts";
-import { loginOpenAICodex } from "@mariozechner/pi-ai";
+import { loginGitHubCopilot, loginOpenAICodex } from "@mariozechner/pi-ai";
 import { createInterface } from "readline";
 
 const BOLD = "\x1b[1m";
@@ -51,6 +51,8 @@ function showSavedCredentials(store: CredentialsStore): void {
     let methodLabel = METHOD_LABELS[cred.method] || cred.method;
     if (cred.method === "oauth" && "openaiCodex" in cred) {
       methodLabel = "OAuth (Codex)";
+    } else if (cred.method === "oauth" && "githubCopilot" in cred) {
+      methodLabel = "OAuth (GitHub Copilot)";
     }
     console.log(`  ${BOLD}${label}${RESET}  ${DIM}— ${methodLabel}${RESET}`);
   }
@@ -130,6 +132,36 @@ async function addOpenAICodex(): Promise<void> {
   }
 }
 
+async function addGitHubCopilot(): Promise<void> {
+  console.log(`\n${YELLOW}Logging in with GitHub Copilot...${RESET}\n`);
+
+  try {
+    const result = await loginGitHubCopilot({
+      onAuth: (url, instructions) => {
+        console.log(instructions || "Open the following URL to authenticate:");
+        console.log(`\n  ${CYAN}${url}${RESET}\n`);
+        try {
+          Bun.spawn(["open", url], { stdio: ["ignore", "ignore", "ignore"] });
+        } catch {}
+      },
+      onPrompt: async ({ message }) => {
+        return await prompt(message || "Paste the code: ");
+      },
+      onProgress: (message) => {
+        console.log(message);
+      },
+    });
+
+    saveProviderCredential("github-copilot", {
+      method: "oauth",
+      githubCopilot: result,
+    });
+    console.log(`${GREEN}GitHub Copilot credentials saved.${RESET}`);
+  } catch (err: any) {
+    console.error(`${RED}GitHub Copilot login failed:${RESET} ${err.message}`);
+  }
+}
+
 async function addWhisperApiKey(): Promise<void> {
   const key = await prompt("\nOpenAI API Key (for Whisper): ");
   if (!key) {
@@ -192,8 +224,9 @@ async function main() {
     console.log(`  ${BOLD}[2]${RESET} Add Anthropic ${DIM}(API key)${RESET}`);
     console.log(`  ${BOLD}[3]${RESET} Add OpenAI ${DIM}(API key)${RESET}`);
     console.log(`  ${BOLD}[4]${RESET} Add OpenAI Codex ${DIM}(ChatGPT subscription)${RESET}`);
-    console.log(`  ${BOLD}[5]${RESET} Add Whisper API key ${DIM}(OpenAI)${RESET}`);
-    console.log(`  ${BOLD}[6]${RESET} Add Ollama API token ${DIM}(optional)${RESET}`);
+    console.log(`  ${BOLD}[5]${RESET} Add GitHub Copilot ${DIM}(subscription)${RESET}`);
+    console.log(`  ${BOLD}[6]${RESET} Add Whisper API key ${DIM}(OpenAI)${RESET}`);
+    console.log(`  ${BOLD}[7]${RESET} Add Ollama API token ${DIM}(optional)${RESET}`);
     if (Object.keys(store).length > 0) {
       console.log(`  ${BOLD}[d]${RESET} Delete a credential`);
     }
@@ -211,8 +244,10 @@ async function main() {
     } else if (choice === "4") {
       await addOpenAICodex();
     } else if (choice === "5") {
-      await addWhisperApiKey();
+      await addGitHubCopilot();
     } else if (choice === "6") {
+      await addWhisperApiKey();
+    } else if (choice === "7") {
       await addOllamaApiKey();
     } else if (choice.toLowerCase() === "d" && Object.keys(store).length > 0) {
       await deleteCredential(store);
