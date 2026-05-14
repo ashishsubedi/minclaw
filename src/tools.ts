@@ -172,6 +172,30 @@ export const webSearchTool: Tool<typeof WebSearchParams> = {
   parameters: WebSearchParams,
 };
 
+const WebFetchParams = Type.Object({
+  url: Type.String({
+    description: "The URL to fetch content from (must be a valid HTTP/HTTPS URL)",
+  }),
+  maxSize: Type.Optional(
+    Type.Number({
+      description: "Maximum content size to return in bytes (default 100KB, max 1MB)",
+      minimum: 1000,
+      maximum: 1048576,
+      default: 102400,
+    })
+  ),
+});
+
+export const webFetchTool: Tool<typeof WebFetchParams> = {
+  name: "web_fetch",
+  description:
+    "Fetch and retrieve content from a URL. Returns the raw content (HTML, JSON, plain text, etc.). " +
+    "Useful for getting details from URLs found by web_search. " +
+    "Content is truncated at maxSize (default 100KB). " +
+    "Returns content type and status information.",
+  parameters: WebFetchParams,
+};
+
 export const allTools: Tool[] = [
   shellTool,
   readFileTool,
@@ -182,6 +206,7 @@ export const allTools: Tool[] = [
   sendMessageTool,
   sendFileTool,
   webSearchTool,
+  webFetchTool,
 ];
 
 // ── Tool execution ────────────────────────────────────────────────
@@ -524,6 +549,115 @@ async function executeSendFile(args: Static<typeof SendFileParams>, context?: To
   }
 }
 
+async function executeWebFetch(
+  args: Static<typeof WebFetchParams>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  const urlStr = String(args.url || "").trim();
+  const maxSize = Math.min(args.maxSize ?? 102400, 1048576);
+
+  if (!urlStr) {
+    return {
+      content: text("Web fetch URL cannot be empty."),
+      isError: true,
+    };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(urlStr);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return {
+        content: text(`Invalid protocol "${url.protocol}". Only HTTP and HTTPS are supported.`),
+        isError: true,
+      };
+    }
+  } catch (err: any) {
+    return {
+      content: text(`Invalid URL: ${err.message}`),
+      isError: true,
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, 30000);
+
+    const res = await fetch(urlStr, {
+      method: "GET",
+      headers: {
+        "User-Agent": "NakedClaw/1.0 (+https://github.com/openclaw/nakedclaw)",
+        Accept: "*/*",
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      return {
+        content: text(
+          `Fetch failed with status ${res.status}: ${res.statusText}`
+        ),
+        isError: true,
+      };
+    }
+
+    const contentType = res.headers.get("content-type") || "unknown";
+    const contentLength = res.headers.get("content-length");
+
+    // Read with size limit
+    const buffer = await res.arrayBuffer();
+    let contentBytes = new Uint8Array(buffer);
+
+    if (contentBytes.length > maxSize) {
+      contentBytes = contentBytes.slice(0, maxSize);
+    }
+
+    // Try to decode as text
+    let content: string;
+    try {
+      content = new TextDecoder().decode(contentBytes);
+    } catch {
+      // If text decoding fails, return base64
+      content = `[Binary content - ${contentBytes.length} bytes, base64:\n${Buffer.from(contentBytes).toString("base64")}]`;
+    }
+
+    // Build result
+    let output = `Fetched content from: ${urlStr}\n`;
+    output += `Content-Type: ${contentType}\n`;
+    output += `Content-Length: ${contentLength || contentBytes.length} bytes\n`;
+
+    if (contentBytes.length > maxSize) {
+      output += `⚠️ Content truncated at ${maxSize} bytes\n`;
+    }
+
+    output += "\n--- Content ---\n";
+    output += content;
+
+    if (output.length > MAX_OUTPUT) {
+      output = output.slice(0, MAX_OUTPUT) + "\n... (output truncated)";
+    }
+
+    return {
+      content: text(output),
+      isError: false,
+    };
+  } catch (err: any) {
+    const message =
+      err?.name === "AbortError"
+        ? "Fetch request timed out (30s limit)."
+        : err?.message || String(err);
+
+    return {
+      content: text(`Error fetching URL: ${message}`),
+      isError: true,
+    };
+  }
+}
+
 type WebSearchResult = {
   title: string;
   url: string;
@@ -806,6 +940,8 @@ export async function executeTool(
       return executeSendFile(args as Static<typeof SendFileParams>, context);
     case "web_search":
       return executeWebSearch(args as Static<typeof WebSearchParams>, context);
+    case "web_fetch":
+      return executeWebFetch(args as Static<typeof WebFetchParams>, context);
     default:
       return { content: text(`Unknown tool: ${name}`), isError: true };
   }
