@@ -202,7 +202,7 @@ function isLoopbackUrl(url: string): boolean {
   return /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(\/|$)/i.test(url);
 }
 
-function isSafeReadOnlyNetworkCommand(command: string, context?: ToolContext): boolean {
+export function isSafeReadOnlyNetworkCommand(command: string, context?: ToolContext): boolean {
   // Heuristic-based detection of safe read-only network commands.
   // Allow common read-only `curl`/`wget` invocations that do not include
   // request bodies, file redirections via shell metacharacters, or explicit
@@ -214,17 +214,17 @@ function isSafeReadOnlyNetworkCommand(command: string, context?: ToolContext): b
   if (/[;&|`<>]/.test(trimmed) || /\$\(/.test(trimmed)) return false;
 
   // Disallow flags that indicate a request body or upload
-  const unsafeFlags = /\b(--data|-d|--data-raw|--data-urlencode|--form|--form-string|--upload-file)\b/i;
+  const unsafeFlags = /(^|\s)(-d\b|--data\b|--data-raw\b|--data-urlencode\b|--form\b|--form-string\b|--upload-file\b)/i;
   if (unsafeFlags.test(trimmed)) return false;
 
   // If the user explicitly sets -X/--request to a non-GET method, treat as unsafe
-  const explicitMethodMatch = trimmed.match(/\b(?:-X|--request)\s+(\w+)\b/i);
-  if (explicitMethodMatch && explicitMethodMatch[1] && explicitMethodMatch[1].toUpperCase() !== "GET") {
+  const explicitMethodMatch = trimmed.match(/(^|\s)(?:-X|--request)\s+(\w+)\b/i);
+  if (explicitMethodMatch && explicitMethodMatch[2] && explicitMethodMatch[2].toUpperCase() !== "GET") {
     return false;
   }
 
   // For wget, reject --post-data / --post-file
-  if (/\bwget\b/i.test(trimmed) && /\b(--post-data|--post-file)\b/i.test(trimmed)) return false;
+  if (/\bwget\b/i.test(trimmed) && /(^|\s)(--post-data\b|--post-file\b)/i.test(trimmed)) return false;
 
   // Extract URLs
   const urlPattern = /\bhttps?:\/\/[^\s'"|;]+/gi;
