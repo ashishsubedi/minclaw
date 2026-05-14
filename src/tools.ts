@@ -39,7 +39,11 @@ export const shellTool: Tool<typeof ShellParams> = {
   name: "shell",
   description:
     "Execute a shell command. Use for curl, git, ls, package managers, and any CLI operation. " +
-    "stdout+stderr are captured. Timeout defaults to 30s (max 120s). Output truncated at 50k chars.",
+    "stdout+stderr are captured. Timeout defaults to 30s (max 120s). Output truncated at 50k chars. " +
+    "A per-command temp directory is available at $NUDKCLAW_TMP_DIR (also set as TMPDIR); " +
+    "use it for temporary files to avoid cluttering the workspace. " +
+    "Risky or networked commands are blocked unless prefixed with CONFIRM:. " +
+    "Prefix with SANDBOX: to run in a temp working directory.",
   parameters: ShellParams,
 };
 
@@ -171,12 +175,48 @@ function text(s: string): TextContent[] {
 
 async function executeShell(args: Static<typeof ShellParams>): Promise<ToolResult> {
   const timeout = Math.min(args.timeout ?? 30, 120) * 1000;
+  const tmpBase = process.env.TMPDIR || "/tmp";
+  const tmpDir = `${tmpBase.replace(/\/$/, "")}/nakedclaw-${Date.now()}`;
+  let command = args.command.trim();
+  let useSandbox = false;
+
+  if (command.startsWith("SANDBOX:")) {
+    useSandbox = true;
+    command = command.slice("SANDBOX:".length).trim();
+  }
+
+  const isConfirmed = command.startsWith("CONFIRM:");
+  if (isConfirmed) {
+    command = command.slice("CONFIRM:".length).trim();
+  }
+
+  const riskyPattern = /(\brm\b\s+-rf\b|\brm\b\s+-fr\b|\bsudo\b|\bdd\b\s+if=|\bmkfs\b|\bshutdown\b|\breboot\b|\bhalt\b|\bkill\b\s+-9\b|\bchmod\b\s+-R\b\s+0|\bchown\b\s+-R\b)/i;
+  const networkPattern = /(\bcurl\b|\bwget\b|\bbrew\b\s+(install|upgrade|tap|update)\b|\bnpm\b\s+install\b|\bpnpm\b\s+install\b|\byarn\b\s+add\b|\bpip\b\s+install\b|\bpip3\b\s+install\b|\bgit\b\s+clone\b|\bgh\b\s+repo\b\s+clone\b|\bpython\b\s+-m\s+pip\s+install\b|\bconda\b\s+install\b)/i;
+  if (riskyPattern.test(command) && !isConfirmed) {
+    return {
+      content: text(
+        "Blocked a potentially destructive command. " +
+        "Re-run with 'CONFIRM: <command>' to proceed, or 'SANDBOX: <command>' to run in a temp directory."
+      ),
+      isError: true,
+    };
+  }
+  if (networkPattern.test(command) && !isConfirmed) {
+    return {
+      content: text(
+        "Blocked a command that accesses the network. " +
+        "Re-run with 'CONFIRM: <command>' to proceed, or 'SANDBOX: <command>' to run in a temp directory."
+      ),
+      isError: true,
+    };
+  }
 
   try {
-    const proc = Bun.spawn(["sh", "-c", args.command], {
+    const proc = Bun.spawn(["sh", "-c", command], {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: { ...process.env, TMPDIR: tmpDir, NUDKCLAW_TMP_DIR: tmpDir },
+      cwd: useSandbox ? tmpDir : undefined,
     });
 
     const timer = setTimeout(() => proc.kill(), timeout);

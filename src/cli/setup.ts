@@ -34,6 +34,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
   "openai-codex": "OpenAI Codex",
   whisper: "Whisper",
+  ollama: "Ollama",
 };
 
 function showSavedCredentials(store: CredentialsStore): void {
@@ -139,6 +140,16 @@ async function addWhisperApiKey(): Promise<void> {
   console.log(`${GREEN}Whisper API key saved.${RESET}`);
 }
 
+async function addOllamaApiKey(): Promise<void> {
+  const key = await prompt("\nOllama API token (optional): ");
+  if (!key) {
+    console.log("No token provided.");
+    return;
+  }
+  saveProviderCredential("ollama", { method: "api_key", apiKey: key });
+  console.log(`${GREEN}Ollama API token saved.${RESET}`);
+}
+
 async function deleteCredential(store: CredentialsStore): Promise<void> {
   const providers = Object.keys(store);
   if (providers.length === 0) {
@@ -182,6 +193,7 @@ async function main() {
     console.log(`  ${BOLD}[3]${RESET} Add OpenAI ${DIM}(API key)${RESET}`);
     console.log(`  ${BOLD}[4]${RESET} Add OpenAI Codex ${DIM}(ChatGPT subscription)${RESET}`);
     console.log(`  ${BOLD}[5]${RESET} Add Whisper API key ${DIM}(OpenAI)${RESET}`);
+    console.log(`  ${BOLD}[6]${RESET} Add Ollama API token ${DIM}(optional)${RESET}`);
     if (Object.keys(store).length > 0) {
       console.log(`  ${BOLD}[d]${RESET} Delete a credential`);
     }
@@ -200,6 +212,8 @@ async function main() {
       await addOpenAICodex();
     } else if (choice === "5") {
       await addWhisperApiKey();
+    } else if (choice === "6") {
+      await addOllamaApiKey();
     } else if (choice.toLowerCase() === "d" && Object.keys(store).length > 0) {
       await deleteCredential(store);
     } else if (choice.toLowerCase() === "q") {

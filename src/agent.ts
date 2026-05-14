@@ -1,4 +1,4 @@
-import { completeSimple, getModel, type Message, type ToolResultMessage } from "@mariozechner/pi-ai";
+import { completeSimple, getModel, type Message, type ToolResultMessage, type Model } from "@mariozechner/pi-ai";
 import { getApiKeyForProvider } from "./auth/credentials.ts";
 import { loadChannels, loadPersistentMemory, loadSystemPrompt } from "./brain/loader.ts";
 import { loadSkillsPrompt } from "./skills/loader.ts";
@@ -14,16 +14,46 @@ export type AgentResponse = {
   toolCalls?: Array<{ name: string; input: unknown; output: string }>;
 };
 
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
+const DEFAULT_OLLAMA_CONTEXT_WINDOW = 8192;
+const DEFAULT_OLLAMA_MAX_TOKENS = 4096;
+
+function normalizeOllamaBaseUrl(input?: string): string {
+  const raw = (input || "").trim();
+  if (!raw) return DEFAULT_OLLAMA_BASE_URL;
+  if (raw.endsWith("/v1")) return raw;
+  return raw.endsWith("/") ? `${raw}v1` : `${raw}/v1`;
+}
+
+function buildOllamaModel(modelId: string, baseUrl: string): Model<"openai-completions"> {
+  return {
+    id: modelId,
+    name: `Ollama ${modelId}`,
+    api: "openai-completions",
+    provider: "ollama",
+    baseUrl,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_OLLAMA_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_OLLAMA_MAX_TOKENS,
+  };
+}
+
 export async function runAgent(
   sessionKey: string,
   userMessage: string,
   attachments?: Attachment[],
   reply?: (text: string) => Promise<void>,
-  toolContextOverride?: { channel: string; sender: string }
+  toolContextOverride?: { channel: string; sender: string },
+  status?: (text: string) => Promise<void>
 ): Promise<AgentResponse> {
   const config = loadConfig();
   const provider = config.model.provider || "anthropic";
-  const apiKey = await getApiKeyForProvider(provider);
+  let apiKey = await getApiKeyForProvider(provider);
+  if (provider === "ollama" && !apiKey) {
+    apiKey = "ollama";
+  }
 
   // Rebuild memory index so agent has fresh context
   const memoryContext = rebuildMemoryIndex();
@@ -33,7 +63,9 @@ export async function runAgent(
 
   // Resolve the model through pi-ai (needed before building messages for the API string)
   const modelRef = config.model.name as any;
-  const model = getModel(provider as any, modelRef);
+  const model = provider === "ollama"
+    ? buildOllamaModel(modelRef, normalizeOllamaBaseUrl(config.model.baseUrl))
+    : getModel(provider as any, modelRef);
   if (!model) {
     throw new Error(`Model not found: ${provider}/${modelRef}`);
   }
@@ -62,6 +94,10 @@ export async function runAgent(
 
   const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 25;
   const toolCallLog: AgentResponse["toolCalls"] = [];
+  const toolCallCounts = new Map<string, number>();
+  const MAX_REPEAT_TOOL_CALLS = 3;
+  let consecutiveToolErrors = 0;
+  const MAX_CONSECUTIVE_TOOL_ERRORS = 4;
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const res = await completeSimple(
@@ -100,7 +136,38 @@ export async function runAgent(
 
     for (const call of toolCalls) {
       if (call.type !== "toolCall") continue;
+      const callSignature = `${call.name}:${JSON.stringify(call.arguments)}`;
+      const seen = (toolCallCounts.get(callSignature) || 0) + 1;
+      toolCallCounts.set(callSignature, seen);
+      if (seen > MAX_REPEAT_TOOL_CALLS) {
+        return {
+          text:
+            "I got stuck repeating the same tool call and stopped. " +
+            "Try a different approach or give a more specific instruction.",
+          toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+        };
+      }
+      if (status) {
+        try {
+          const input = JSON.stringify(call.arguments);
+          await status(`Running tool: ${call.name}\n${input}`);
+        } catch {}
+      }
       const result = await executeTool(call.name, call.arguments, toolContext);
+
+      if (result.isError) {
+        consecutiveToolErrors += 1;
+        if (consecutiveToolErrors >= MAX_CONSECUTIVE_TOOL_ERRORS) {
+          return {
+            text:
+              "I hit several tool errors in a row and stopped. " +
+              "If you want me to try a different approach, please clarify the request.",
+            toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+          };
+        }
+      } else {
+        consecutiveToolErrors = 0;
+      }
 
       toolCallLog.push({
         name: call.name,

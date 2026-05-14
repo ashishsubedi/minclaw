@@ -13,6 +13,7 @@ const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
 const CONFIG_PATH = resolve(import.meta.dir, "..", "..", "nakedclaw.json5");
+const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
 
 /** Curated model lists per provider */
 export const MODELS: Record<string, string[]> = {
@@ -38,15 +39,55 @@ export const MODELS: Record<string, string[]> = {
     "gpt-5.2-codex",
     "gpt-5.1-codex-max",
   ],
+  ollama: [],
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
   "openai-codex": "OpenAI Codex",
+  ollama: "Ollama",
 };
 
+const PROVIDERS_REQUIRING_CREDENTIALS = new Set(["anthropic", "openai", "openai-codex"]);
+
+function normalizeOllamaBaseUrl(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return DEFAULT_OLLAMA_BASE_URL;
+  if (trimmed.endsWith("/v1")) return trimmed;
+  return trimmed.endsWith("/") ? `${trimmed}v1` : `${trimmed}/v1`;
+}
+
+function toOllamaApiBase(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return "http://localhost:11434";
+  if (trimmed.endsWith("/v1")) return trimmed.slice(0, -3);
+  return trimmed.endsWith("/") ? trimmed.slice(0, -1) : trimmed;
+}
+
+type OllamaTagResponse = {
+  models?: Array<{ name?: string }>;
+};
+
+async function fetchOllamaModels(baseUrl: string): Promise<string[] | null> {
+  const apiBase = toOllamaApiBase(baseUrl);
+  const url = `${apiBase}/api/tags`;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = (await res.json()) as OllamaTagResponse;
+    const names = (data.models || [])
+      .map((m) => (m.name || "").trim())
+      .filter((name) => name.length > 0);
+    return names.length > 0 ? names : [];
+  } catch {
+    return null;
+  }
+}
+
 function warnIfNoCredential(provider: string): void {
+  if (!PROVIDERS_REQUIRING_CREDENTIALS.has(provider)) return;
   const store = loadAllCredentials();
   if (!store[provider]) {
     const label = PROVIDER_LABELS[provider] || provider;
@@ -54,10 +95,13 @@ function warnIfNoCredential(provider: string): void {
   }
 }
 
-export function updateConfigModel(provider: string, name: string): void {
+export function updateConfigModel(provider: string, name: string, baseUrl?: string): void {
   const raw = readFileSync(CONFIG_PATH, "utf-8");
   const config = JSON5.parse(raw);
-  config.model = { provider, name };
+  config.model = { ...config.model, provider, name };
+  if (baseUrl) {
+    config.model.baseUrl = baseUrl;
+  }
 
   // Write back as JSON5-ish (use JSON with 2-space indent — JSON is valid JSON5)
   writeFileSync(CONFIG_PATH, JSON5.stringify(config, null, 2) + "\n", "utf-8");
@@ -87,7 +131,13 @@ async function setModel(spec: string): Promise<void> {
     process.exit(1);
   }
 
-  updateConfigModel(provider, name);
+  if (provider === "ollama") {
+    const config = loadConfig();
+    const baseUrl = normalizeOllamaBaseUrl(config.model.baseUrl || DEFAULT_OLLAMA_BASE_URL);
+    updateConfigModel(provider, name, baseUrl);
+  } else {
+    updateConfigModel(provider, name);
+  }
   const label = PROVIDER_LABELS[provider] || provider;
   console.log(`${GREEN}Model set to ${BOLD}${label}/${name}${RESET}`);
   warnIfNoCredential(provider);
@@ -125,6 +175,60 @@ async function interactivePick(): Promise<void> {
 
   const selectedProvider = providers[providerIdx]!;
   const models = MODELS[selectedProvider]!;
+
+  if (selectedProvider === "ollama") {
+    const defaultModel = selectedProvider === currentProvider ? currentModel : "";
+    const defaultBaseUrl = normalizeOllamaBaseUrl(
+      config.model.baseUrl || DEFAULT_OLLAMA_BASE_URL
+    );
+    const baseUrlInput = await prompt(`Base URL (${defaultBaseUrl}): `);
+    const baseUrl = normalizeOllamaBaseUrl(baseUrlInput || defaultBaseUrl);
+
+    const fetchedModels = await fetchOllamaModels(baseUrl);
+    let selectedModel = "";
+
+    if (fetchedModels === null) {
+      console.log(`${YELLOW}Ollama not reachable at ${toOllamaApiBase(baseUrl)}.${RESET}`);
+      console.log(`${DIM}Start Ollama or verify the Base URL, or enter a model name manually.${RESET}`);
+    } else if (fetchedModels.length === 0) {
+      console.log(`${YELLOW}No models found in Ollama. Pull a model first.${RESET}`);
+    } else {
+      console.log(`\nOllama models:\n`);
+      for (let i = 0; i < fetchedModels.length; i++) {
+        const m = fetchedModels[i] || "";
+        const marker = m === currentModel && selectedProvider === currentProvider
+          ? ` ${GREEN}(current)${RESET}` : "";
+        console.log(`  ${BOLD}[${i + 1}]${RESET} ${m}${marker}`);
+      }
+      console.log(`  ${BOLD}[0]${RESET} Enter a model name manually`);
+      console.log();
+
+      const modelChoice = await prompt("Model (number): ");
+      const modelIdx = parseInt(modelChoice, 10);
+      if (!isNaN(modelIdx) && modelIdx > 0 && modelIdx <= fetchedModels.length) {
+        selectedModel = fetchedModels[modelIdx - 1] || "";
+      }
+    }
+
+    if (!selectedModel) {
+      const modelPrompt = defaultModel ? `Model name (${defaultModel}): ` : "Model name: ";
+      const modelInput = await prompt(modelPrompt);
+      selectedModel = modelInput || defaultModel;
+    }
+
+    if (!selectedModel) {
+      console.log("Model name is required.");
+      rl.close();
+      return;
+    }
+
+    updateConfigModel(selectedProvider, selectedModel, baseUrl);
+    const label = PROVIDER_LABELS[selectedProvider] || selectedProvider;
+    console.log(`\n${GREEN}Model set to ${BOLD}${label}/${selectedModel}${RESET}`);
+    console.log(`${DIM}Restart the daemon for changes to take effect: ${CYAN}nakedclaw restart${RESET}`);
+    rl.close();
+    return;
+  }
 
   // Step 2: Pick model
   console.log(`\n${PROVIDER_LABELS[selectedProvider] || selectedProvider} models:\n`);

@@ -11,6 +11,7 @@ export type Config = {
   model: {
     provider: string;
     name: string;
+    baseUrl?: string;
   };
   workspace: string;
   channels: {

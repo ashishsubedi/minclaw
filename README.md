@@ -67,6 +67,12 @@ NakedClaw supports multiple authentication methods:
 - **API key** — paste your `sk-...` key
 - **Codex** (ChatGPT subscription) — browser-based OAuth login, no API key needed
 
+**Ollama:**
+- **Local models** — use the OpenAI-compatible endpoint (default `http://localhost:11434/v1`)
+- **Base URL** — set `model.baseUrl` in `nakedclaw.json5` (optional if using default)
+- **Token** — optional; save with `nakedclaw setup` or set `OLLAMA_API_KEY`
+- **Select model** — `nakedclaw models set ollama/<model>` (free-form)
+
 ## CLI
 
 ```

@@ -197,11 +197,16 @@ export async function getApiKeyForProvider(provider: string): Promise<string> {
     const envKey = process.env.OPENAI_API_KEY;
     if (envKey) return envKey;
   }
+  if (provider === "ollama") {
+    const envKey = process.env.OLLAMA_API_KEY;
+    if (envKey) return envKey;
+  }
 
   const store = loadAllCredentials();
   const cred = store[provider];
 
   if (!cred) {
+    if (provider === "ollama") return "";
     throw new Error(
       `No credentials for ${provider}. Run: nakedclaw setup`
     );
