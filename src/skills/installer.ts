@@ -1,5 +1,7 @@
 import type { SkillEntry, SkillInstallSpec } from "./types.ts";
-import { loadSkillByName } from "./catalog.ts";
+import { loadSkillByName, resolveSkillsDir } from "./catalog.ts";
+import { loadConfig } from "../config.ts";
+import { hasBinary } from "./eligibility.ts";
 
 type InstallResult = { ok: boolean; message: string };
 
@@ -108,4 +110,42 @@ export async function installSkillByName(
     return { ok: false, message: `Skill "${name}" not found. Run "/skills sync" first.` };
   }
   return installSkill(entry, specId);
+}
+
+/**
+ * Install a skill via the ClawHub CLI.
+ */
+export async function installSkillFromClawhub(
+  name: string,
+  version?: string
+): Promise<InstallResult> {
+  if (!hasBinary("clawhub")) {
+    return {
+      ok: false,
+      message: "ClawHub CLI not found. Install it with: nakedclaw skills install clawhub",
+    };
+  }
+
+  const config = loadConfig();
+  const workdir = config.workspace;
+  const dir = resolveSkillsDir();
+  const args = ["clawhub", "install", name, "--workdir", workdir, "--dir", dir];
+  if (version) {
+    args.push("--version", version);
+  }
+
+  const result = await runInstall(args);
+  if (!result.ok) return result;
+
+  const installed = loadSkillByName(name);
+  if (!installed) {
+    return {
+      ok: false,
+      message:
+        `ClawHub install finished, but SKILL.md was not found in ${dir}. ` +
+        "Check CLAWHUB_WORKDIR/--workdir or --dir settings.",
+    };
+  }
+
+  return result;
 }

@@ -1,6 +1,6 @@
 import { loadCachedCatalog, loadSkillByName, syncCatalog } from "../skills/catalog.ts";
 import { checkEligibility, getSkillStatuses } from "../skills/eligibility.ts";
-import { installSkillByName } from "../skills/installer.ts";
+import { installSkillByName, installSkillFromClawhub } from "../skills/installer.ts";
 
 /**
  * CLI handler for: nakedclaw skills [list|sync|install <name>|info <name>]
@@ -22,17 +22,26 @@ export async function handleSkillsCli(args: string[]): Promise<void> {
     }
 
     case "install": {
-      const name = rest[0];
-      if (!name) {
-        console.error("Usage: nakedclaw skills install <name> [spec-id]");
+      const parsed = parseInstallArgs(rest);
+      if (!parsed.name) {
+        console.error(
+          "Usage: nakedclaw skills install <name> [spec-id] [--clawhub | --source clawhub] [--version <ver>]"
+        );
         process.exit(1);
       }
-      const specId = rest[1];
-      const result = await installSkillByName(name, specId);
+
+      const result =
+        parsed.source === "clawhub"
+          ? await installSkillFromClawhub(parsed.name, parsed.version)
+          : await installSkillByName(parsed.name, parsed.specId);
+
       if (result.ok) {
         console.log(result.message);
       } else {
         console.error(result.message);
+        if (parsed.source !== "clawhub" && /not found/i.test(result.message)) {
+          console.error("Tip: try --clawhub to install from ClawHub.");
+        }
         process.exit(1);
       }
       break;
@@ -105,4 +114,47 @@ export async function handleSkillsCli(args: string[]): Promise<void> {
       break;
     }
   }
+}
+
+type InstallArgs = {
+  name?: string;
+  specId?: string;
+  source: "openclaw" | "clawhub";
+  version?: string;
+};
+
+function parseInstallArgs(args: string[]): InstallArgs {
+  let source: InstallArgs["source"] = "openclaw";
+  let version: string | undefined;
+  const remaining: string[] = [];
+  
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i] || "";
+    if (token === "--source" && args[i + 1]) {
+      const next = args[i + 1];
+      if (next === "clawhub") {
+        source = "clawhub";
+      }
+      i += 1;
+      continue;
+    }
+    if (token === "--clawhub") {
+      source = "clawhub";
+      continue;
+    }
+    if (token === "--version" && args[i + 1]) {
+      version = args[i + 1];
+      i += 1;
+      continue;
+    }
+
+    remaining.push(token);
+  }
+
+  return {
+    name: remaining[0],
+    specId: remaining[1],
+    source,
+    version,
+  };
 }

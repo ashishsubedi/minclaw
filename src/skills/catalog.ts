@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { loadConfig } from "../config.ts";
 import { parseSkillFile } from "./frontmatter.ts";
@@ -8,13 +8,13 @@ const GITHUB_API_BASE = "https://api.github.com/repos/openclaw/openclaw/contents
 const GITHUB_RAW_BASE = "https://raw.githubusercontent.com/openclaw/openclaw/main/skills";
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-function skillsDir(): string {
+export function resolveSkillsDir(): string {
   const config = loadConfig();
   return resolve(config.skills?.dir || "./skills");
 }
 
 function catalogPath(): string {
-  return join(skillsDir(), "catalog.json");
+  return join(resolveSkillsDir(), "catalog.json");
 }
 
 /**
@@ -22,14 +22,56 @@ function catalogPath(): string {
  */
 export function loadCachedCatalog(): SkillEntry[] {
   const path = catalogPath();
-  if (!existsSync(path)) return [];
+  const local = loadLocalSkills();
+  if (!existsSync(path)) return local;
 
   try {
     const raw = readFileSync(path, "utf-8");
-    return JSON.parse(raw) as SkillEntry[];
+    const cached = JSON.parse(raw) as SkillEntry[];
+    return mergeCatalogs(cached, local);
   } catch {
-    return [];
+    return local;
   }
+}
+
+/**
+ * Load any locally installed skills from disk.
+ */
+function loadLocalSkills(): SkillEntry[] {
+  const dir = resolveSkillsDir();
+  if (!existsSync(dir)) return [];
+
+  const entries: SkillEntry[] = [];
+  for (const name of readdirSync(dir)) {
+    const skillDir = join(dir, name);
+    try {
+      if (!statSync(skillDir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    const filePath = join(skillDir, "SKILL.md");
+    if (!existsSync(filePath)) continue;
+
+    try {
+      const content = readFileSync(filePath, "utf-8");
+      const entry = parseSkillFile(content, `skills/${name}/SKILL.md`, "local");
+      entries.push(entry);
+    } catch {
+      // Skip invalid skill files
+    }
+  }
+
+  return entries;
+}
+
+function mergeCatalogs(primary: SkillEntry[], secondary: SkillEntry[]): SkillEntry[] {
+  const byName = new Map(primary.map((entry) => [entry.name, entry]));
+  for (const entry of secondary) {
+    if (!byName.has(entry.name)) {
+      byName.set(entry.name, entry);
+    }
+  }
+  return Array.from(byName.values());
 }
 
 /**
@@ -81,7 +123,7 @@ async function fetchSkillMd(skillName: string): Promise<string | null> {
  * Fetch the full catalog from GitHub, download SKILL.md files, and cache locally.
  */
 export async function syncCatalog(): Promise<SkillEntry[]> {
-  const dir = skillsDir();
+  const dir = resolveSkillsDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
   console.log("[skills] Fetching catalog from GitHub...");
@@ -135,9 +177,13 @@ export async function fetchCatalog(): Promise<SkillEntry[]> {
  * Load a single skill from the local cache by name.
  */
 export function loadSkillByName(name: string): SkillEntry | null {
-  const filePath = join(skillsDir(), name, "SKILL.md");
+  const cached = loadCachedCatalog();
+  const fromCatalog = cached.find((entry) => entry.name === name);
+  if (fromCatalog) return fromCatalog;
+
+  const filePath = join(resolveSkillsDir(), name, "SKILL.md");
   if (!existsSync(filePath)) return null;
 
   const content = readFileSync(filePath, "utf-8");
-  return parseSkillFile(content, `skills/${name}/SKILL.md`, "openclaw");
+  return parseSkillFile(content, `skills/${name}/SKILL.md`, "local");
 }

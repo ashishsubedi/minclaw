@@ -18,6 +18,8 @@ const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_CONTEXT_WINDOW = 8192;
 const DEFAULT_OLLAMA_MAX_TOKENS = 4096;
 const VERBOSE = process.env.NUDKCLAW_VERBOSE === "1";
+const PENDING_CONFIRM_TTL_MS = 10 * 60 * 1000;
+const pendingShellConfirmations = new Map<string, { command: string; timestamp: number }>();
 
 function truncateLog(text: string, maxLen = 2000): string {
   if (text.length <= maxLen) return text;
@@ -46,6 +48,25 @@ function buildOllamaModel(modelId: string, baseUrl: string): Model<"openai-compl
   };
 }
 
+function getPendingConfirmation(sessionKey: string): string | null {
+  const pending = pendingShellConfirmations.get(sessionKey);
+  if (!pending) return null;
+  if (Date.now() - pending.timestamp > PENDING_CONFIRM_TTL_MS) {
+    pendingShellConfirmations.delete(sessionKey);
+    return null;
+  }
+  return pending.command;
+}
+
+function clearPendingConfirmation(sessionKey: string): void {
+  pendingShellConfirmations.delete(sessionKey);
+}
+
+function setPendingConfirmation(sessionKey: string, command: string): void {
+  if (!command) return;
+  pendingShellConfirmations.set(sessionKey, { command, timestamp: Date.now() });
+}
+
 export async function runAgent(
   sessionKey: string,
   userMessage: string,
@@ -54,6 +75,49 @@ export async function runAgent(
   toolContextOverride?: { channel: string; sender: string },
   status?: (text: string) => Promise<void>
 ): Promise<AgentResponse> {
+  const colonIdx = sessionKey.indexOf(":");
+  const toolContext: ToolContext | undefined = toolContextOverride
+    ? { channel: toolContextOverride.channel, sender: toolContextOverride.sender, reply }
+    : colonIdx > 0
+      ? { channel: sessionKey.slice(0, colonIdx), sender: sessionKey.slice(colonIdx + 1), reply }
+      : undefined;
+  const trimmedMessage = userMessage.trim();
+  const lowerMessage = trimmedMessage.toLowerCase();
+  const isDirectConfirm = trimmedMessage.startsWith("CONFIRM:");
+  const isPlainConfirm = lowerMessage === "confirm";
+
+  if (isPlainConfirm) {
+    const pending = getPendingConfirmation(sessionKey);
+    if (!pending) {
+      return { text: "No pending command to confirm." };
+    }
+    clearPendingConfirmation(sessionKey);
+    const result = await executeTool("shell", { command: `CONFIRM: ${pending}` }, toolContext);
+    const resultText = result.content.map((c) => c.text).join("\n") || "(no output)";
+    return {
+      text: resultText,
+      toolCalls: [{ name: "shell", input: { command: `CONFIRM: ${pending}` }, output: resultText }],
+    };
+  }
+
+  if (isDirectConfirm) {
+    clearPendingConfirmation(sessionKey);
+    const command = trimmedMessage;
+    if (command.length <= "CONFIRM:".length) {
+      return { text: "Please include a command after the prefix." };
+    }
+    const result = await executeTool("shell", { command }, toolContext);
+    const resultText = result.content.map((c) => c.text).join("\n") || "(no output)";
+    return {
+      text: resultText,
+      toolCalls: [{ name: "shell", input: { command }, output: resultText }],
+    };
+  }
+
+  if (trimmedMessage) {
+    clearPendingConfirmation(sessionKey);
+  }
+
   const config = loadConfig();
   const provider = config.model.provider || "anthropic";
   let apiKey = await getApiKeyForProvider(provider);
@@ -89,14 +153,6 @@ export async function runAgent(
   if (!model.reasoning) {
     options.temperature = 0.7;
   }
-
-  // Extract channel + sender from session key for tool context (e.g. send_file)
-  const colonIdx = sessionKey.indexOf(":");
-  const toolContext: ToolContext | undefined = toolContextOverride
-    ? { channel: toolContextOverride.channel, sender: toolContextOverride.sender, reply }
-    : colonIdx > 0
-      ? { channel: sessionKey.slice(0, colonIdx), sender: sessionKey.slice(colonIdx + 1), reply }
-      : undefined;
 
   const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 25;
   const toolCallLog: AgentResponse["toolCalls"] = [];
@@ -172,12 +228,12 @@ export async function runAgent(
         } catch {}
       }
       const result = await executeTool(call.name, call.arguments, toolContext);
+      const resultText = result.content.map((c) => c.text).join("\n");
 
       if (VERBOSE) {
-        const outputText = result.content.map((c) => c.text).join("\n");
         console.log(
           `[agent] Tool result (${call.name}, error=${result.isError}): ` +
-          `${truncateLog(outputText || "(no output)")}`
+          `${truncateLog(resultText || "(no output)")}`
         );
       }
 
@@ -198,8 +254,25 @@ export async function runAgent(
       toolCallLog.push({
         name: call.name,
         input: call.arguments,
-        output: result.content.map((c) => c.text).join("\n"),
+        output: resultText,
       });
+
+      if (
+        call.name === "shell" &&
+        result.isError &&
+        (resultText.includes("Blocked a potentially destructive command") ||
+          resultText.includes("Blocked a command that accesses the network"))
+      ) {
+        const original = String((call.arguments as { command?: string }).command || "").trim();
+        setPendingConfirmation(sessionKey, original);
+        const confirmLine = original ? `CONFIRM: ${original}` : "CONFIRM: <command>";
+        return {
+          text:
+            "That command needs confirmation. Reply with:\n\n" +
+            `${confirmLine}`,
+          toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+        };
+      }
 
       const toolResult: ToolResultMessage = {
         role: "toolResult",
