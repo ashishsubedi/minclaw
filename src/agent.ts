@@ -18,12 +18,141 @@ const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_CONTEXT_WINDOW = 8192;
 const DEFAULT_OLLAMA_MAX_TOKENS = 4096;
 const VERBOSE = process.env.NUDKCLAW_VERBOSE === "1";
+const DEBUG_LLM = process.env.NUDKCLAW_DEBUG_LLM === "1" || process.env.NUDKCLAW_VERBOSE === "1";
 const PENDING_CONFIRM_TTL_MS = 10 * 60 * 1000;
 const pendingShellConfirmations = new Map<string, { command: string; timestamp: number }>();
+
+type UsageSummary = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
+  costSource?: "catalog" | "estimated-openai" | "unavailable";
+  cost?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+};
+
+type CostBreakdown = NonNullable<UsageSummary["cost"]>;
+
+function calculateCostBreakdown(model: Model<any>, usage: UsageSummary): CostBreakdown {
+  const input = ((model.cost?.input ?? 0) / 1_000_000) * (usage.input ?? 0);
+  const output = ((model.cost?.output ?? 0) / 1_000_000) * (usage.output ?? 0);
+  const cacheRead = ((model.cost?.cacheRead ?? 0) / 1_000_000) * (usage.cacheRead ?? 0);
+  const cacheWrite = ((model.cost?.cacheWrite ?? 0) / 1_000_000) * (usage.cacheWrite ?? 0);
+  return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
+}
+
+function getEstimatedCopilotPricingModel(model: Model<any>): Model<any> | undefined {
+  if (model.provider !== "github-copilot") return undefined;
+  return getModel("openai" as any, model.id) || getModel("openai-codex" as any, model.id);
+}
 
 function truncateLog(text: string, maxLen = 2000): string {
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen)}... (truncated)`;
+}
+
+function debugLog(message: string): void {
+  if (!DEBUG_LLM) return;
+  console.error(`[llm-debug] ${message}`);
+}
+
+function debugPayload(label: string, payload: unknown): void {
+  if (!DEBUG_LLM) return;
+  let serialized = "";
+  try {
+    serialized = JSON.stringify(payload, null, 2);
+  } catch (err) {
+    serialized = `[unserializable payload: ${err instanceof Error ? err.message : String(err)}]`;
+  }
+  debugLog(`${label}: ${truncateLog(serialized, 8000)}`);
+}
+
+function summarizeUsage(usage: unknown, model?: Model<any>): UsageSummary | undefined {
+  if (!usage || typeof usage !== "object") return undefined;
+  const typed = usage as UsageSummary;
+  const summary: UsageSummary = {
+    input: typed.input,
+    output: typed.output,
+    cacheRead: typed.cacheRead,
+    cacheWrite: typed.cacheWrite,
+    totalTokens: typed.totalTokens,
+    costSource: typed.cost ? "catalog" : "unavailable",
+    cost: typed.cost
+      ? {
+          input: typed.cost.input,
+          output: typed.cost.output,
+          cacheRead: typed.cost.cacheRead,
+          cacheWrite: typed.cost.cacheWrite,
+          total: typed.cost.total,
+        }
+      : undefined,
+  };
+
+  if (model && summary.cost && summary.cost.total === 0 && model.provider === "github-copilot") {
+    const pricingModel = getEstimatedCopilotPricingModel(model);
+    if (pricingModel && (pricingModel.cost.input || pricingModel.cost.output || pricingModel.cost.cacheRead || pricingModel.cost.cacheWrite)) {
+      summary.cost = calculateCostBreakdown(pricingModel, summary);
+      summary.costSource = "estimated-openai";
+    }
+  }
+
+  return summary;
+}
+
+function summarizeMessage(message: Message, model?: Model<any>): unknown {
+
+  if (message.role === "user") {
+    if (typeof message.content === "string") {
+      return { role: "user", content: truncateLog(message.content, 200) };
+    }
+    return {
+      role: "user",
+      content: message.content.map((part) =>
+        part.type === "text"
+          ? { type: "text", text: truncateLog(part.text, 120) }
+          : { type: "image", mimeType: part.mimeType, size: part.data.length }
+      ),
+    };
+  }
+
+  if (message.role === "assistant") {
+    return {
+      role: "assistant",
+      provider: message.provider,
+      api: message.api,
+      model: message.model,
+      stopReason: message.stopReason,
+      usage: summarizeUsage((message as { usage?: unknown }).usage, model),
+      content: message.content.map((part) => {
+        if (part.type === "text") {
+          return { type: "text", text: truncateLog(part.text, 120) };
+        }
+        if (part.type === "thinking") {
+          return { type: "thinking", text: truncateLog(part.thinking, 120) };
+        }
+        return { type: "toolCall", name: part.name, id: part.id };
+      }),
+    };
+  }
+
+  return {
+    role: "toolResult",
+    toolName: message.toolName,
+    toolCallId: message.toolCallId,
+    isError: message.isError,
+    content: message.content.map((part) =>
+      part.type === "text"
+        ? { type: "text", text: truncateLog(part.text, 120) }
+        : { type: "image", mimeType: part.mimeType, size: part.data.length }
+    ),
+  };
 }
 
 function normalizeOllamaBaseUrl(input?: string): string {
@@ -162,13 +291,38 @@ export async function runAgent(
   const MAX_CONSECUTIVE_TOOL_ERRORS = 4;
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const res = await completeSimple(
-      model,
-      { systemPrompt, messages, tools: allTools },
-      options
+    const context = { systemPrompt, messages, tools: allTools };
+    debugLog(
+      `call ${i + 1}/${MAX_TOOL_ITERATIONS} provider=${provider} model=${model.id} api=${model.api} ` +
+      `messages=${messages.length} tools=${allTools.length} attachments=${attachments?.length || 0}`
     );
+    debugPayload("request context", {
+      provider,
+      model: model.id,
+      api: model.api,
+      systemPrompt: truncateLog(systemPrompt, 1200),
+      messages: messages.slice(-8).map((message) => summarizeMessage(message, model)),
+      tools: allTools.map((tool) => ({ name: tool.name, description: tool.description })),
+    });
+
+    let res;
+    try {
+      res = await completeSimple(
+        model,
+        context,
+        {
+          ...options,
+          onPayload: (payload) => debugPayload("provider payload", payload),
+        }
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      debugLog(`call ${i + 1} threw: ${message}`);
+      throw err;
+    }
 
     if (res.errorMessage) {
+      debugLog(`call ${i + 1} errorMessage: ${truncateLog(res.errorMessage, 4000)}`);
       if (res.errorMessage.includes("only authorized for use with Claude Code")) {
         throw new Error(
           "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
@@ -179,8 +333,11 @@ export async function runAgent(
       throw new Error(res.errorMessage);
     }
 
+    debugPayload("usage summary", summarizeUsage((res as { usage?: unknown }).usage, model) ?? null);
+
     // Push assistant message into conversation for multi-turn tool use
     messages.push(res);
+    debugPayload("response snapshot", summarizeMessage(res, model));
 
     if (VERBOSE) {
       const responseText = res.content
@@ -192,6 +349,21 @@ export async function runAgent(
         `[agent] Model response (stopReason=${res.stopReason || "unknown"}): ` +
         `${truncateLog(responseText || "(no text)")}`
       );
+      const usage = summarizeUsage((res as { usage?: unknown }).usage, model);
+      if (usage) {
+        const cost = usage.cost;
+        const usageLine =
+          `input=${usage.input ?? 0} output=${usage.output ?? 0} cacheRead=${usage.cacheRead ?? 0} ` +
+          `cacheWrite=${usage.cacheWrite ?? 0} totalTokens=${usage.totalTokens ?? 0}` +
+          (cost ? ` cost=${cost.total ?? 0}` : "");
+        console.log(`[agent] Usage (${usage.costSource ?? "unknown"}): ${usageLine}`);
+        if (cost) {
+          console.log(
+            `[agent] Cost breakdown: input=${cost.input ?? 0} output=${cost.output ?? 0} ` +
+            `cacheRead=${cost.cacheRead ?? 0} cacheWrite=${cost.cacheWrite ?? 0} total=${cost.total ?? 0}`
+          );
+        }
+      }
     }
 
     if (res.stopReason !== "toolUse") {

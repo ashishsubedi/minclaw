@@ -674,7 +674,7 @@ async function executeWebSearch(
   context?: ToolContext
 ): Promise<ToolResult> {
   const query = String(args.query || "").trim();
-  const maxResults = Math.min(args.maxResults ?? 5, 10);
+  const maxResults = Math.min(args.maxResults ?? 5, 5);
 
   if (!query) {
     return {
@@ -837,7 +837,7 @@ async function executeWebSearch(
       };
     }
 
-    // LLM-friendly formatting
+    // Keep tool output compact so follow-up requests stay small and stable.
     let output = `Search results for "${query}":\n\n`;
 
     for (const [i, r] of results.entries()) {
@@ -870,7 +870,7 @@ async function executeWebSearch(
     }
 
     if (suggestions.length > 0) {
-      output += `Suggestions:\n`;
+      output += `Search suggestions:\n`;
 
       for (const suggestion of suggestions.slice(0, 5)) {
         output += `- ${String(suggestion)}\n`;
