@@ -42,7 +42,7 @@ export type Credentials =
   | { method: "oauth"; provider?: "anthropic"; oauth: OAuthCredentials }
   | { method: "oauth"; provider: "openai-codex"; openaiCodex: OpenAICodexCredentials };
 
-const STATE_DIR = join(homedir(), ".nakedclaw");
+const STATE_DIR = join(homedir(), ".minclaw");
 const CREDS_PATH = join(STATE_DIR, "credentials.json");
 
 export function getStateDir(): string {
@@ -129,7 +129,7 @@ async function refreshOAuthCredentials(
   const result = await getOAuthApiKey(provider, { [provider]: credentials });
 
   if (!result) {
-    throw new Error(`OAuth token refresh failed for ${provider}. Run: nakedclaw setup`);
+    throw new Error(`OAuth token refresh failed for ${provider}. Run: minclaw setup`);
   }
 
   if (result.newCredentials) {
@@ -238,7 +238,7 @@ export async function getApiKeyForProvider(provider: string): Promise<string> {
   if (!cred) {
     if (provider === "ollama") return "";
     throw new Error(
-      `No credentials for ${provider}. Run: nakedclaw setup`
+      `No credentials for ${provider}. Run: minclaw setup`
     );
   }
 
@@ -249,7 +249,7 @@ export async function getApiKeyForProvider(provider: string): Promise<string> {
   if (provider === "openai-codex") {
     const codex = "openaiCodex" in cred ? cred.openaiCodex : undefined;
     if (!codex) {
-      throw new Error("Invalid credential state. Run: nakedclaw setup");
+      throw new Error("Invalid credential state. Run: minclaw setup");
     }
     return await refreshOAuthCredentials("openai-codex", codex);
   }
@@ -257,7 +257,7 @@ export async function getApiKeyForProvider(provider: string): Promise<string> {
   if (provider === "github-copilot") {
     const githubCopilot = "githubCopilot" in cred ? cred.githubCopilot : undefined;
     if (!githubCopilot) {
-      throw new Error("Invalid credential state. Run: nakedclaw setup");
+      throw new Error("Invalid credential state. Run: minclaw setup");
     }
     return await refreshOAuthCredentials("github-copilot", githubCopilot);
   }
@@ -267,7 +267,7 @@ export async function getApiKeyForProvider(provider: string): Promise<string> {
     return refreshAnthropicIfNeeded(provider, cred.oauth);
   }
 
-  throw new Error("Invalid credential state. Run: nakedclaw setup");
+  throw new Error("Invalid credential state. Run: minclaw setup");
 }
 
 /**

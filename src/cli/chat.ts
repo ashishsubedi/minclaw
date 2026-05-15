@@ -28,12 +28,12 @@ async function main() {
   // Check daemon is running
   if (!existsSync(sockPath)) {
     console.log(
-      `${RED}Daemon is not running.${RESET} Start it with: ${CYAN}nakedclaw start${RESET}`
+      `${RED}Daemon is not running.${RESET} Start it with: ${CYAN}minclaw start${RESET}`
     );
     process.exit(1);
   }
 
-  console.log(`${BOLD}${CYAN}NakedClaw${RESET}`);
+  console.log(`${BOLD}${CYAN}MinClaw${RESET}`);
   console.log(
     `${DIM}Session: ${sessionId} | /help for commands | /quit to exit${RESET}\n`
   );
@@ -168,7 +168,7 @@ async function main() {
 
 function printHelp() {
   console.log(`
-${BOLD}${CYAN}NakedClaw Commands${RESET}
+${BOLD}${CYAN}MinClaw Commands${RESET}
 
   ${YELLOW}Chat${RESET}
     Just type a message and press Enter.

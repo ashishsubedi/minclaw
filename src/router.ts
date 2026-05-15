@@ -141,6 +141,7 @@ export async function handleMessage(
       role: "assistant",
       content: result.text,
       timestamp: Date.now(),
+      usage: result.usage,
     });
     appendChat(msg.channel, msg.sender, "assistant", result.text);
 
@@ -184,7 +185,7 @@ async function handleCommand(
       const heartbeat = getHeartbeatStatus();
       const jobs = listJobs();
 
-      let status = `NakedClaw Status\n`;
+      let status = `MinClaw Status\n`;
       status += `Sessions: ${sessions.length}\n`;
       status += `Scheduled jobs: ${jobs.length}\n`;
       status += `Heartbeat: ${heartbeat.enabled ? "on" : "off"}`;

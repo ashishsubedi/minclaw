@@ -9,6 +9,21 @@ export type SessionMessage = {
   channel?: string;
   sender?: string;
   attachments?: Array<{ type: string; filePath: string; mimeType?: string }>;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    totalTokens?: number;
+    costSource?: "catalog" | "estimated-openai" | "unavailable";
+    cost?: {
+      input?: number;
+      output?: number;
+      cacheRead?: number;
+      cacheWrite?: number;
+      total?: number;
+    };
+  };
 };
 
 /**

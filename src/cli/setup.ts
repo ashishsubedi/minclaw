@@ -211,7 +211,7 @@ async function deleteCredential(store: CredentialsStore): Promise<void> {
 }
 
 async function main() {
-  console.log(`\n${BOLD}${CYAN}NakedClaw Setup${RESET}\n`);
+  console.log(`\n${BOLD}${CYAN}MinClaw Setup${RESET}\n`);
 
   ensureStateDir();
 
@@ -267,9 +267,9 @@ async function main() {
 ${BOLD}Setup complete!${RESET}
 
 ${CYAN}Next steps:${RESET}
-  1. Pick a model:      ${CYAN}nakedclaw models${RESET}
-  2. Start the daemon:  ${CYAN}nakedclaw start${RESET}
-  3. Chat:              ${CYAN}nakedclaw${RESET}
+  1. Pick a model:      ${CYAN}minclaw models${RESET}
+  2. Start the daemon:  ${CYAN}minclaw start${RESET}
+  3. Chat:              ${CYAN}minclaw${RESET}
 `);
   }
 

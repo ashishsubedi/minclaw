@@ -13,7 +13,7 @@ const DIM = "\x1b[2m";
 const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
-const CONFIG_PATH = resolve(import.meta.dir, "..", "..", "nakedclaw.json5");
+const CONFIG_PATH = resolve(import.meta.dir, "..", "..", "minclaw.json5");
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
 
 /** Curated model lists per provider */
@@ -101,7 +101,7 @@ function warnIfNoCredential(provider: string): void {
   const store = loadAllCredentials();
   if (!store[provider]) {
     const label = PROVIDER_LABELS[provider] || provider;
-    console.log(`${YELLOW}No credentials for ${label}. Run: ${CYAN}nakedclaw setup${RESET}`);
+    console.log(`${YELLOW}No credentials for ${label}. Run: ${CYAN}minclaw setup${RESET}`);
   }
 }
 
@@ -127,8 +127,8 @@ function showCurrentModel(): void {
 async function setModel(spec: string): Promise<void> {
   const slash = spec.indexOf("/");
   if (slash === -1) {
-    console.error(`Invalid format. Use: ${CYAN}nakedclaw models set <provider>/<model>${RESET}`);
-    console.error(`Example: ${CYAN}nakedclaw models set openai/gpt-5${RESET}`);
+    console.error(`Invalid format. Use: ${CYAN}minclaw models set <provider>/<model>${RESET}`);
+    console.error(`Example: ${CYAN}minclaw models set openai/gpt-5${RESET}`);
     process.exit(1);
   }
 
@@ -242,7 +242,7 @@ async function interactivePick(): Promise<void> {
     updateConfigModel(selectedProvider, selectedModel, baseUrl);
     const label = PROVIDER_LABELS[selectedProvider] || selectedProvider;
     console.log(`\n${GREEN}Model set to ${BOLD}${label}/${selectedModel}${RESET}`);
-    console.log(`${DIM}Restart the daemon for changes to take effect: ${CYAN}nakedclaw restart${RESET}`);
+    console.log(`${DIM}Restart the daemon for changes to take effect: ${CYAN}minclaw restart${RESET}`);
     rl.close();
     return;
   }
@@ -271,7 +271,7 @@ async function interactivePick(): Promise<void> {
   const label = PROVIDER_LABELS[selectedProvider] || selectedProvider;
   console.log(`\n${GREEN}Model set to ${BOLD}${label}/${selectedModel}${RESET}`);
   warnIfNoCredential(selectedProvider);
-  console.log(`${DIM}Restart the daemon for changes to take effect: ${CYAN}nakedclaw restart${RESET}`);
+  console.log(`${DIM}Restart the daemon for changes to take effect: ${CYAN}minclaw restart${RESET}`);
 
   rl.close();
 }
@@ -282,7 +282,7 @@ export async function handleModelsCli(args: string[]): Promise<void> {
   if (sub === "set") {
     const spec = rest[0];
     if (!spec) {
-      console.error(`Usage: ${CYAN}nakedclaw models set <provider>/<model>${RESET}`);
+      console.error(`Usage: ${CYAN}minclaw models set <provider>/<model>${RESET}`);
       process.exit(1);
     }
     await setModel(spec);
@@ -290,7 +290,7 @@ export async function handleModelsCli(args: string[]): Promise<void> {
     await interactivePick();
   } else {
     console.error(`Unknown subcommand: ${sub}`);
-    console.error(`Usage: ${CYAN}nakedclaw models${RESET} or ${CYAN}nakedclaw models set <provider>/<model>${RESET}`);
+    console.error(`Usage: ${CYAN}minclaw models${RESET} or ${CYAN}minclaw models set <provider>/<model>${RESET}`);
     process.exit(1);
   }
 }

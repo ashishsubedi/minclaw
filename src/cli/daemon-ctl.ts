@@ -126,13 +126,13 @@ export async function restartDaemon(options?: { verbose?: boolean }): Promise<vo
 export async function showStatus(): Promise<void> {
   const status = isDaemonRunning();
   if (!status.running) {
-    console.log(`${BOLD}NakedClaw${RESET} — ${RED}not running${RESET}`);
-    console.log(`\nStart with: ${CYAN}nakedclaw start${RESET}`);
+    console.log(`${BOLD}MinClaw${RESET} — ${RED}not running${RESET}`);
+    console.log(`\nStart with: ${CYAN}minclaw start${RESET}`);
     return;
   }
 
   console.log(
-    `${BOLD}NakedClaw${RESET} — ${GREEN}running${RESET} (PID ${status.pid})`
+    `${BOLD}MinClaw${RESET} — ${GREEN}running${RESET} (PID ${status.pid})`
   );
 
   // Try to get detailed status from the daemon socket

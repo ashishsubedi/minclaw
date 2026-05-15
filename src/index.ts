@@ -20,14 +20,14 @@ import { getStateDir, ensureStateDir } from "./auth/credentials.ts";
 import { PID_FILENAME } from "./daemon/protocol.ts";
 
 /**
- * NakedClaw — daemon entry point.
+ * MinClaw — daemon entry point.
  *
  * Boots enabled channels, wires them to the message router,
  * starts the heartbeat, scheduler, and Unix socket server, then waits.
  */
 
 async function main() {
-  console.log("NakedClaw starting...\n");
+  console.log("MinClaw starting...\n");
 
   ensureStateDir();
   const config = loadConfig();
@@ -125,7 +125,7 @@ async function main() {
 
   if (activeAdapters.length === 0) {
     console.log(
-      "No channels enabled. Edit nakedclaw.json5 and set a channel to enabled: true"
+      "No channels enabled. Edit minclaw.json5 and set a channel to enabled: true"
     );
     console.log("Then set the required env vars (TELEGRAM_BOT_TOKEN, etc.)");
     console.log("\nRunning in headless mode (heartbeat + scheduler only)...\n");
@@ -136,7 +136,7 @@ async function main() {
   }
 
   // --- Config watcher ---
-  const configPath = resolve(import.meta.dir, "..", "nakedclaw.json5");
+  const configPath = resolve(import.meta.dir, "..", "minclaw.json5");
   let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   watch(configPath, (event) => {
@@ -157,7 +157,7 @@ async function main() {
     }, 300);
   });
 
-  console.log("NakedClaw is running. Press Ctrl+C to stop.\n");
+  console.log("MinClaw is running. Press Ctrl+C to stop.\n");
 
   // --- Graceful shutdown ---
   const shutdown = async () => {

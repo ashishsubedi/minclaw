@@ -3,7 +3,7 @@ import { checkEligibility, getSkillStatuses } from "../skills/eligibility.ts";
 import { installSkillByName, installSkillFromClawhub } from "../skills/installer.ts";
 
 /**
- * CLI handler for: nakedclaw skills [list|sync|install <name>|info <name>]
+ * CLI handler for: minclaw skills [list|sync|install <name>|info <name>]
  */
 export async function handleSkillsCli(args: string[]): Promise<void> {
   const [action, ...rest] = args;
@@ -25,7 +25,7 @@ export async function handleSkillsCli(args: string[]): Promise<void> {
       const parsed = parseInstallArgs(rest);
       if (!parsed.name) {
         console.error(
-          "Usage: nakedclaw skills install <name> [spec-id] [--clawhub | --source clawhub] [--version <ver>]"
+          "Usage: minclaw skills install <name> [spec-id] [--clawhub | --source clawhub] [--version <ver>]"
         );
         process.exit(1);
       }
@@ -50,12 +50,12 @@ export async function handleSkillsCli(args: string[]): Promise<void> {
     case "info": {
       const name = rest[0];
       if (!name) {
-        console.error("Usage: nakedclaw skills info <name>");
+        console.error("Usage: minclaw skills info <name>");
         process.exit(1);
       }
       const entry = loadSkillByName(name);
       if (!entry) {
-        console.error(`Skill "${name}" not found. Run "nakedclaw skills sync" first.`);
+        console.error(`Skill "${name}" not found. Run "minclaw skills sync" first.`);
         process.exit(1);
       }
       const status = checkEligibility(entry);
@@ -108,7 +108,7 @@ export async function handleSkillsCli(args: string[]): Promise<void> {
         if (s.missing.env.length) missing.push(`env: ${s.missing.env.join(", ")}`);
         if (missing.length) console.log(`    needs: ${missing.join("; ")}`);
         if (s.install?.length) {
-          console.log(`    install: nakedclaw skills install ${s.name}`);
+          console.log(`    install: minclaw skills install ${s.name}`);
         }
       }
       break;

@@ -1,15 +1,16 @@
 {
-  "name": "nakedclaw",
+  "name": "minclaw",
   "version": "0.2.0",
   "module": "src/cli.ts",
   "type": "module",
   "private": true,
   "bin": {
-    "nakedclaw": "src/cli.ts"
+    "minclaw": "src/cli.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",
+    "web": "bun run src/web/server.ts",
     "cli": "bun run src/cli.ts",
     "tui": "bun run src/tui/viewer.ts"
   },

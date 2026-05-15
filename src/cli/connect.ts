@@ -10,7 +10,7 @@ const YELLOW = "\x1b[33m";
 const DIM = "\x1b[2m";
 const RESET = "\x1b[0m";
 
-const CONFIG_PATH = resolve(import.meta.dir, "../..", "nakedclaw.json5");
+const CONFIG_PATH = resolve(import.meta.dir, "../..", "minclaw.json5");
 
 const rl = createInterface({ input: process.stdin, output: process.stdout });
 
@@ -63,7 +63,7 @@ async function connectWhatsApp() {
       // Auto-exit on successful connection
       console.log(`\n${GREEN}WhatsApp connected and auth saved.${RESET}`);
       console.log(
-        `${CYAN}Start the daemon to receive messages:${RESET} nakedclaw start\n`
+        `${CYAN}Start the daemon to receive messages:${RESET} minclaw start\n`
       );
       adapter.stop().then(() => resolve());
     });
@@ -74,7 +74,7 @@ async function connectWhatsApp() {
     process.on("SIGINT", () => {
       console.log(`\n\n${GREEN}WhatsApp auth saved.${RESET}`);
       console.log(
-        `${CYAN}Start the daemon to receive messages:${RESET} nakedclaw start\n`
+        `${CYAN}Start the daemon to receive messages:${RESET} minclaw start\n`
       );
       adapter.stop().then(() => resolve());
     });
@@ -155,7 +155,7 @@ async function connectTelegram() {
 
   console.log(`\n${GREEN}Telegram enabled.${RESET}`);
   console.log(
-    `${CYAN}Restart the daemon to start receiving messages:${RESET} nakedclaw restart\n`
+    `${CYAN}Restart the daemon to start receiving messages:${RESET} minclaw restart\n`
   );
   rl.close();
 }
@@ -245,7 +245,7 @@ async function connectSlack() {
 
   console.log(`\n${GREEN}Slack enabled.${RESET}`);
   console.log(
-    `${CYAN}Restart the daemon to start receiving messages:${RESET} nakedclaw restart\n`
+    `${CYAN}Restart the daemon to start receiving messages:${RESET} minclaw restart\n`
   );
   rl.close();
 }
@@ -270,7 +270,7 @@ switch (channel) {
 
   default:
     console.log(`
-${BOLD}Usage:${RESET} nakedclaw connect <channel>
+${BOLD}Usage:${RESET} minclaw connect <channel>
 
 ${BOLD}Channels:${RESET}
   whatsapp (wa)    Connect WhatsApp via QR code

@@ -145,7 +145,7 @@ export function rebuildMemoryIndex(): string {
   const sessions = listSessions();
   const indexPath = getIndexPath();
 
-  let md = `# NakedClaw Temporary Memory Index\n\n`;
+  let md = `# MinClaw Temporary Memory Index\n\n`;
   md += `> Auto-generated. Last updated: ${new Date().toISOString()}\n\n`;
   md += `## Active Sessions (${sessions.length})\n\n`;
 

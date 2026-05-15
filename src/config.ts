@@ -44,7 +44,7 @@ export type Config = {
 const CONFIG_PATH = resolve(
   import.meta.dir,
   "..",
-  "nakedclaw.json5"
+  "minclaw.json5"
 );
 
 let _config: Config | null = null;

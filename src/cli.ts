@@ -1,17 +1,17 @@
 #!/usr/bin/env bun
 
 /**
- * NakedClaw CLI entry point.
+ * MinClaw CLI entry point.
  *
  * Usage:
- *   nakedclaw              — chat with the agent (default)
- *   nakedclaw setup        — configure credentials
- *   nakedclaw connect <ch> — connect a channel (whatsapp, telegram, slack)
- *   nakedclaw start        — start daemon in background
- *   nakedclaw stop         — stop daemon
- *   nakedclaw restart      — restart daemon
- *   nakedclaw status       — show daemon status
- *   nakedclaw logs         — show daemon logs
+ *   minclaw              — chat with the agent (default)
+ *   minclaw setup        — configure credentials
+ *   minclaw connect <ch> — connect a channel (whatsapp, telegram, slack)
+ *   minclaw start        — start daemon in background
+ *   minclaw stop         — stop daemon
+ *   minclaw restart      — restart daemon
+ *   minclaw status       — show daemon status
+ *   minclaw logs         — show daemon logs
  */
 
 const [subcommand, ...restArgs] = process.argv.slice(2);
@@ -86,7 +86,7 @@ switch (subcommand || "chat") {
   case "--help":
   case "-h": {
     console.log(`
-Usage: nakedclaw [command]
+Usage: minclaw [command]
 
 Commands:
   (none)        Chat with the agent (connects to daemon)
@@ -107,7 +107,7 @@ Commands:
 
   default: {
     console.error(`Unknown command: ${subcommand}`);
-    console.error("Run 'nakedclaw help' for usage.");
+    console.error("Run 'minclaw help' for usage.");
     process.exit(1);
   }
 }

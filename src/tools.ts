@@ -57,7 +57,7 @@ export const readFileTool: Tool<typeof ReadFileParams> = {
 export const saveCredentialTool: Tool<typeof SaveCredentialParams> = {
   name: "save_credential",
   description:
-    "Save an API key to ~/.nakedclaw/credentials.json for a given provider. " +
+    "Save an API key to ~/.minclaw/credentials.json for a given provider. " +
     "Use when the user provides an API key they want stored. " +
     "IMPORTANT: For OpenAI keys (for Whisper/transcription), always use provider 'whisper' — " +
     "never use 'openai' (that's reserved for the chat model's OAuth credentials). " +
@@ -273,7 +273,7 @@ export function isSafeReadOnlyNetworkCommand(command: string, context?: ToolCont
 async function executeShell(args: Static<typeof ShellParams>, context?: ToolContext): Promise<ToolResult> {
   const timeout = Math.min(args.timeout ?? 30, 120) * 1000;
   const tmpBase = process.env.TMPDIR || "/tmp";
-  const tmpDir = `${tmpBase.replace(/\/$/, "")}/nakedclaw-${Date.now()}`;
+  const tmpDir = `${tmpBase.replace(/\/$/, "")}/minclaw-${Date.now()}`;
   let command = args.command.trim();
 
   const isConfirmed = command.startsWith("CONFIRM:");
@@ -376,7 +376,7 @@ function executeRemember(args: Static<typeof RememberParams>): ToolResult {
     if (!existsSync(path)) {
       const header =
         "# Persistent Memory\n\n" +
-        "<!-- Auto-updated by NakedClaw. You can also edit this file manually. -->\n\n" +
+        "<!-- Auto-updated by MinClaw. You can also edit this file manually. -->\n\n" +
         "## Learned Facts\n\n";
       writeFileSync(path, header, "utf-8");
     }
@@ -588,7 +588,7 @@ async function executeWebFetch(
     const res = await fetch(urlStr, {
       method: "GET",
       headers: {
-        "User-Agent": "NakedClaw/1.0 (+https://github.com/openclaw/nakedclaw)",
+        "User-Agent": "MinClaw/1.0 (+https://github.com/openclaw/minclaw)",
         Accept: "*/*",
       },
       signal: controller.signal,
@@ -703,7 +703,7 @@ async function executeWebSearch(
       method: "GET",
       headers: {
         Accept: "application/json",
-        "User-Agent": "NakedClaw/1.0",
+        "User-Agent": "MinClaw/1.0",
       },
       signal: controller.signal,
     });

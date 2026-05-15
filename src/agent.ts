@@ -12,6 +12,7 @@ import { allTools, executeTool, type ToolContext } from "./tools.ts";
 export type AgentResponse = {
   text: string;
   toolCalls?: Array<{ name: string; input: unknown; output: string }>;
+  usage?: UsageSummary;
 };
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
@@ -289,6 +290,7 @@ export async function runAgent(
   const MAX_REPEAT_TOOL_CALLS = 3;
   let consecutiveToolErrors = 0;
   const MAX_CONSECUTIVE_TOOL_ERRORS = 4;
+  let lastUsage: UsageSummary | undefined;
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const context = { systemPrompt, messages, tools: allTools };
@@ -326,14 +328,15 @@ export async function runAgent(
       if (res.errorMessage.includes("only authorized for use with Claude Code")) {
         throw new Error(
           "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
-          "Fix: set ANTHROPIC_API_KEY or run `nakedclaw setup` and choose API key auth.\n" +
+          "Fix: set ANTHROPIC_API_KEY or run `minclaw setup` and choose API key auth.\n" +
           "Get a key at https://console.anthropic.com/settings/keys"
         );
       }
       throw new Error(res.errorMessage);
     }
 
-    debugPayload("usage summary", summarizeUsage((res as { usage?: unknown }).usage, model) ?? null);
+    lastUsage = summarizeUsage((res as { usage?: unknown }).usage, model);
+    debugPayload("usage summary", lastUsage ?? null);
 
     // Push assistant message into conversation for multi-turn tool use
     messages.push(res);
@@ -349,14 +352,13 @@ export async function runAgent(
         `[agent] Model response (stopReason=${res.stopReason || "unknown"}): ` +
         `${truncateLog(responseText || "(no text)")}`
       );
-      const usage = summarizeUsage((res as { usage?: unknown }).usage, model);
-      if (usage) {
-        const cost = usage.cost;
+      if (lastUsage) {
+        const cost = lastUsage.cost;
         const usageLine =
-          `input=${usage.input ?? 0} output=${usage.output ?? 0} cacheRead=${usage.cacheRead ?? 0} ` +
-          `cacheWrite=${usage.cacheWrite ?? 0} totalTokens=${usage.totalTokens ?? 0}` +
+          `input=${lastUsage.input ?? 0} output=${lastUsage.output ?? 0} cacheRead=${lastUsage.cacheRead ?? 0} ` +
+          `cacheWrite=${lastUsage.cacheWrite ?? 0} totalTokens=${lastUsage.totalTokens ?? 0}` +
           (cost ? ` cost=${cost.total ?? 0}` : "");
-        console.log(`[agent] Usage (${usage.costSource ?? "unknown"}): ${usageLine}`);
+        console.log(`[agent] Usage (${lastUsage.costSource ?? "unknown"}): ${usageLine}`);
         if (cost) {
           console.log(
             `[agent] Cost breakdown: input=${cost.input ?? 0} output=${cost.output ?? 0} ` +
@@ -374,7 +376,7 @@ export async function runAgent(
           .map((block) => ("text" in block ? block.text : ""))
           .join("\n") || "(no response)";
 
-      return { text, toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined };
+      return { text, toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
     }
 
     // Execute each tool call and push results
@@ -386,11 +388,12 @@ export async function runAgent(
       const seen = (toolCallCounts.get(callSignature) || 0) + 1;
       toolCallCounts.set(callSignature, seen);
       if (seen > MAX_REPEAT_TOOL_CALLS) {
-        return {
+          return {
           text:
             "I got stuck repeating the same tool call and stopped. " +
             "Try a different approach or give a more specific instruction.",
-          toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+            toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+            usage: lastUsage,
         };
       }
       if (status) {
@@ -417,6 +420,7 @@ export async function runAgent(
               "I hit several tool errors in a row and stopped. " +
               "If you want me to try a different approach, please clarify the request.",
             toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+            usage: lastUsage,
           };
         }
       } else {
@@ -475,7 +479,7 @@ export async function runAgent(
 
   // If we exhaust iterations, return whatever text we have
   console.log("[agent] Tool loop hit max iterations");
-  return { text: "(max tool iterations reached)", toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined };
+  return { text: "(max tool iterations reached)", toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
 }
 
 async function buildSystemPrompt(workspace: string, memoryContext: string): Promise<string> {

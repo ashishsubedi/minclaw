@@ -122,7 +122,7 @@ export async function installSkillFromClawhub(
   if (!hasBinary("clawhub")) {
     return {
       ok: false,
-      message: "ClawHub CLI not found. Install it with: nakedclaw skills install clawhub",
+      message: "ClawHub CLI not found. Install it with: minclaw skills install clawhub",
     };
   }
 

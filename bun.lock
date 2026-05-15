@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "nakedclaw",
+      "name": "minclaw",
       "dependencies": {
         "@mariozechner/pi-ai": "^0.52.6",
         "@slack/bolt": "^4.6.0",
