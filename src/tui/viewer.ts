@@ -118,7 +118,7 @@ function doSearch(query: string) {
 }
 
 function printHelp() {
-  header("NakedClaw TUI");
+  header("MinClaw TUI");
   print(`  ${BOLD}Commands:${RESET}`);
   print(`    ${GREEN}sessions${RESET}       List all sessions`);
   print(`    ${GREEN}view <n>${RESET}       View session by number`);
@@ -165,10 +165,10 @@ function formatBytes(bytes: number): string {
 
 // Main REPL loop
 async function main() {
-  print(`${BOLD}${CYAN}NakedClaw TUI Session Viewer${RESET}`);
+  print(`${BOLD}${CYAN}MinClaw TUI Session Viewer${RESET}`);
   print(`${DIM}Type "help" for commands, "quit" to exit.${RESET}\n`);
 
-  const prompt = `${BOLD}${CYAN}nakedclaw>${RESET} `;
+  const prompt = `${BOLD}${CYAN}minclaw>${RESET} `;
 
   for await (const line of console) {
     const input = line.trim();

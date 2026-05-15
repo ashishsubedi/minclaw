@@ -39,7 +39,10 @@ export const shellTool: Tool<typeof ShellParams> = {
   name: "shell",
   description:
     "Execute a shell command. Use for curl, git, ls, package managers, and any CLI operation. " +
-    "stdout+stderr are captured. Timeout defaults to 30s (max 120s). Output truncated at 50k chars.",
+    "stdout+stderr are captured. Timeout defaults to 30s (max 120s). Output truncated at 50k chars. " +
+    "A per-command temp directory is available at $NUDKCLAW_TMP_DIR (also set as TMPDIR); " +
+    "use it for temporary files to avoid cluttering the workspace. " +
+    "Risky or networked commands are blocked unless prefixed with CONFIRM:.",
   parameters: ShellParams,
 };
 
@@ -54,7 +57,7 @@ export const readFileTool: Tool<typeof ReadFileParams> = {
 export const saveCredentialTool: Tool<typeof SaveCredentialParams> = {
   name: "save_credential",
   description:
-    "Save an API key to ~/.nakedclaw/credentials.json for a given provider. " +
+    "Save an API key to ~/.minclaw/credentials.json for a given provider. " +
     "Use when the user provides an API key they want stored. " +
     "IMPORTANT: For OpenAI keys (for Whisper/transcription), always use provider 'whisper' — " +
     "never use 'openai' (that's reserved for the chat model's OAuth credentials). " +
@@ -148,6 +151,51 @@ export const sendFileTool: Tool<typeof SendFileParams> = {
   parameters: SendFileParams,
 };
 
+const WebSearchParams = Type.Object({
+  query: Type.String({
+    description: "Search query for web search using searxng. Uses different technology like DuckDuckGo, Google, Bing... Returns results with title, URL, snippet, source, and date.",
+  }),
+  maxResults: Type.Optional(
+    Type.Number({
+      description: "Maximum results to return",
+      minimum: 1,
+      maximum: 10,
+      default: 5,
+    })
+  ),
+});
+
+export const webSearchTool: Tool<typeof WebSearchParams> = {
+  name: "web_search",
+  description:
+    "Search the web using SearXNG. Returns normalized search results with titles, URLs, snippets, sources, and dates.",
+  parameters: WebSearchParams,
+};
+
+const WebFetchParams = Type.Object({
+  url: Type.String({
+    description: "The URL to fetch content from (must be a valid HTTP/HTTPS URL)",
+  }),
+  maxSize: Type.Optional(
+    Type.Number({
+      description: "Maximum content size to return in bytes (default 100KB, max 1MB)",
+      minimum: 1000,
+      maximum: 1048576,
+      default: 102400,
+    })
+  ),
+});
+
+export const webFetchTool: Tool<typeof WebFetchParams> = {
+  name: "web_fetch",
+  description:
+    "Fetch and retrieve content from a URL. Returns the raw content (HTML, JSON, plain text, etc.). " +
+    "Useful for getting details from URLs found by web_search. " +
+    "Content is truncated at maxSize (default 100KB). " +
+    "Returns content type and status information.",
+  parameters: WebFetchParams,
+};
+
 export const allTools: Tool[] = [
   shellTool,
   readFileTool,
@@ -157,6 +205,8 @@ export const allTools: Tool[] = [
   scheduleReminderTool,
   sendMessageTool,
   sendFileTool,
+  webSearchTool,
+  webFetchTool,
 ];
 
 // ── Tool execution ────────────────────────────────────────────────
@@ -169,14 +219,94 @@ function text(s: string): TextContent[] {
   return [{ type: "text", text: s }];
 }
 
-async function executeShell(args: Static<typeof ShellParams>): Promise<ToolResult> {
+function isTelegramContext(context?: ToolContext): boolean {
+  return context?.channel === "telegram";
+}
+
+function isLoopbackUrl(url: string): boolean {
+  return /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(\/|$)/i.test(url);
+}
+
+export function isSafeReadOnlyNetworkCommand(command: string, context?: ToolContext): boolean {
+  // Heuristic-based detection of safe read-only network commands.
+  // Allow common read-only `curl`/`wget` invocations that do not include
+  // request bodies, file redirections via shell metacharacters, or explicit
+  // non-GET methods. This avoids maintaining a huge domain whitelist.
+  const trimmed = command.trim();
+  if (!/^(curl|wget)\b/i.test(trimmed)) return false;
+
+  // Reject obvious shell injection / piping / redirection patterns
+  if (/[;&|`<>]/.test(trimmed) || /\$\(/.test(trimmed)) return false;
+
+  // Disallow flags that indicate a request body or upload
+  const unsafeFlags = /(^|\s)(-d\b|--data\b|--data-raw\b|--data-urlencode\b|--form\b|--form-string\b|--upload-file\b)/i;
+  if (unsafeFlags.test(trimmed)) return false;
+
+  // If the user explicitly sets -X/--request to a non-GET method, treat as unsafe
+  const explicitMethodMatch = trimmed.match(/(^|\s)(?:-X|--request)\s+(\w+)\b/i);
+  if (explicitMethodMatch && explicitMethodMatch[2] && explicitMethodMatch[2].toUpperCase() !== "GET") {
+    return false;
+  }
+
+  // For wget, reject --post-data / --post-file
+  if (/\bwget\b/i.test(trimmed) && /(^|\s)(--post-data\b|--post-file\b)/i.test(trimmed)) return false;
+
+  // Extract URLs
+  const urlPattern = /\bhttps?:\/\/[^\s'"|;]+/gi;
+  const urls = (trimmed.match(urlPattern) || []);
+  if (urls.length === 0) return false;
+
+  // Allow loopback (localhost) unconditionally
+  const allLoopback = urls.every((u) => isLoopbackUrl(u));
+  if (allLoopback) return true;
+
+  // Avoid contacting local/internal hostnames by default
+  // (e.g., 10.x.x.x, 192.168.x.x) — treat these as not safe unless explicitly confirmed
+  const internalPattern = /^https?:\/\/(?:10\.|127\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)/i;
+  if (urls.some((u) => internalPattern.test(u))) return false;
+
+  // At this point we have HTTP(s) URLs, no body flags, no injection, and no internal hosts.
+  // Treat these as safe read-only commands.
+  return true;
+}
+
+async function executeShell(args: Static<typeof ShellParams>, context?: ToolContext): Promise<ToolResult> {
   const timeout = Math.min(args.timeout ?? 30, 120) * 1000;
+  const tmpBase = process.env.TMPDIR || "/tmp";
+  const tmpDir = `${tmpBase.replace(/\/$/, "")}/minclaw-${Date.now()}`;
+  let command = args.command.trim();
+
+  const isConfirmed = command.startsWith("CONFIRM:");
+  if (isConfirmed) {
+    command = command.slice("CONFIRM:".length).trim();
+  }
+
+  const riskyPattern = /(\brm\b\s+-rf\b|\brm\b\s+-fr\b|\bsudo\b|\bdd\b\s+if=|\bmkfs\b|\bshutdown\b|\breboot\b|\bhalt\b|\bkill\b\s+-9\b|\bchmod\b\s+-R\b\s+0|\bchown\b\s+-R\b)/i;
+  const networkPattern = /(\bcurl\b|\bwget\b|\bbrew\b\s+(install|upgrade|tap|update)\b|\bnpm\b\s+install\b|\bpnpm\b\s+install\b|\byarn\b\s+add\b|\bpip\b\s+install\b|\bpip3\b\s+install\b|\bgit\b\s+clone\b|\bgh\b\s+repo\b\s+clone\b|\bpython\b\s+-m\s+pip\s+install\b|\bconda\b\s+install\b)/i;
+  if (riskyPattern.test(command) && !isConfirmed) {
+    return {
+      content: text(
+        "Blocked a potentially destructive command. " +
+        "Re-run with 'CONFIRM: <command>' to proceed."
+      ),
+      isError: true,
+    };
+  }
+  if (networkPattern.test(command) && !isConfirmed && !isSafeReadOnlyNetworkCommand(command, context)) {
+    return {
+      content: text(
+        "Blocked a command that accesses the network. " +
+        "Re-run with 'CONFIRM: <command>' to proceed."
+      ),
+      isError: true,
+    };
+  }
 
   try {
-    const proc = Bun.spawn(["sh", "-c", args.command], {
+    const proc = Bun.spawn(["sh", "-c", command], {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env: { ...process.env, TMPDIR: tmpDir, NUDKCLAW_TMP_DIR: tmpDir },
     });
 
     const timer = setTimeout(() => proc.kill(), timeout);
@@ -246,7 +376,7 @@ function executeRemember(args: Static<typeof RememberParams>): ToolResult {
     if (!existsSync(path)) {
       const header =
         "# Persistent Memory\n\n" +
-        "<!-- Auto-updated by NakedClaw. You can also edit this file manually. -->\n\n" +
+        "<!-- Auto-updated by MinClaw. You can also edit this file manually. -->\n\n" +
         "## Learned Facts\n\n";
       writeFileSync(path, header, "utf-8");
     }
@@ -419,6 +549,371 @@ async function executeSendFile(args: Static<typeof SendFileParams>, context?: To
   }
 }
 
+async function executeWebFetch(
+  args: Static<typeof WebFetchParams>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  const urlStr = String(args.url || "").trim();
+  const maxSize = Math.min(args.maxSize ?? 102400, 1048576);
+
+  if (!urlStr) {
+    return {
+      content: text("Web fetch URL cannot be empty."),
+      isError: true,
+    };
+  }
+
+  let url: URL;
+  try {
+    url = new URL(urlStr);
+    if (!["http:", "https:"].includes(url.protocol)) {
+      return {
+        content: text(`Invalid protocol "${url.protocol}". Only HTTP and HTTPS are supported.`),
+        isError: true,
+      };
+    }
+  } catch (err: any) {
+    return {
+      content: text(`Invalid URL: ${err.message}`),
+      isError: true,
+    };
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, 30000);
+
+    const res = await fetch(urlStr, {
+      method: "GET",
+      headers: {
+        "User-Agent": "MinClaw/1.0 (+https://github.com/openclaw/minclaw)",
+        Accept: "*/*",
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      return {
+        content: text(
+          `Fetch failed with status ${res.status}: ${res.statusText}`
+        ),
+        isError: true,
+      };
+    }
+
+    const contentType = res.headers.get("content-type") || "unknown";
+    const contentLength = res.headers.get("content-length");
+
+    // Read with size limit
+    const buffer = await res.arrayBuffer();
+    let contentBytes = new Uint8Array(buffer);
+
+    if (contentBytes.length > maxSize) {
+      contentBytes = contentBytes.slice(0, maxSize);
+    }
+
+    // Try to decode as text
+    let content: string;
+    try {
+      content = new TextDecoder().decode(contentBytes);
+    } catch {
+      // If text decoding fails, return base64
+      content = `[Binary content - ${contentBytes.length} bytes, base64:\n${Buffer.from(contentBytes).toString("base64")}]`;
+    }
+
+    // Build result
+    let output = `Fetched content from: ${urlStr}\n`;
+    output += `Content-Type: ${contentType}\n`;
+    output += `Content-Length: ${contentLength || contentBytes.length} bytes\n`;
+
+    if (contentBytes.length > maxSize) {
+      output += `⚠️ Content truncated at ${maxSize} bytes\n`;
+    }
+
+    output += "\n--- Content ---\n";
+    output += content;
+
+    if (output.length > MAX_OUTPUT) {
+      output = output.slice(0, MAX_OUTPUT) + "\n... (output truncated)";
+    }
+
+    return {
+      content: text(output),
+      isError: false,
+    };
+  } catch (err: any) {
+    const message =
+      err?.name === "AbortError"
+        ? "Fetch request timed out (30s limit)."
+        : err?.message || String(err);
+
+    return {
+      content: text(`Error fetching URL: ${message}`),
+      isError: true,
+    };
+  }
+}
+
+type WebSearchResult = {
+  title: string;
+  url: string;
+  snippet: string;
+  source: string;
+  score: number;
+  publishedDate: string | null;
+  category: string;
+  thumbnail: string | null;
+};
+
+async function executeWebSearch(
+  args: Static<typeof WebSearchParams>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  const query = String(args.query || "").trim();
+  const maxResults = Math.min(args.maxResults ?? 5, 5);
+
+  if (!query) {
+    return {
+      content: text("Web search query cannot be empty."),
+      isError: true,
+    };
+  }
+
+  const searxngUrl =
+    process.env.SEARXNG_BASE_URL || "http://localhost:8080";
+
+  const searchUrl =
+    `${searxngUrl.replace(/\/$/, "")}` +
+    `/?q=${encodeURIComponent(query)}` +
+    `&format=json`;
+
+  try {
+    // Timeout protection
+    const controller = new AbortController();
+
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, 15000);
+
+    const res = await fetch(searchUrl, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "MinClaw/1.0",
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeout);
+
+    if (!res.ok) {
+      return {
+        content: text(
+          `Search failed with status ${res.status}: ${res.statusText}`
+        ),
+        isError: true,
+      };
+    }
+
+    const data: any = await res.json();
+
+    if (!data || typeof data !== "object") {
+      return {
+        content: text("Invalid search response."),
+        isError: true,
+      };
+    }
+
+    const rawResults = Array.isArray(data.results)
+      ? data.results
+      : [];
+
+    const answers = Array.isArray(data.answers)
+      ? data.answers
+      : [];
+
+    const suggestions = Array.isArray(data.suggestions)
+      ? data.suggestions
+      : [];
+
+    const infoboxes = Array.isArray(data.infoboxes)
+      ? data.infoboxes
+      : [];
+
+    if (rawResults.length === 0) {
+      return {
+        content: text(`No results found for "${query}".`),
+        isError: false,
+      };
+    }
+
+    const seen = new Set<string>();
+    const results: WebSearchResult[] = rawResults
+      .filter((r: any) => r && typeof r === "object")
+      .map((r: any): WebSearchResult => {
+        const title =
+          typeof r.title === "string"
+            ? r.title.trim()
+            : "Untitled";
+
+        const url =
+          typeof r.url === "string"
+            ? r.url.trim()
+            : "";
+
+        const snippet =
+          typeof r.content === "string"
+            ? r.content.trim()
+            : "";
+
+        const source =
+          Array.isArray(r.engines)
+            ? r.engines.join(", ")
+            : typeof r.engine === "string"
+              ? r.engine
+              : "unknown";
+
+        const score =
+          typeof r.score === "number"
+            ? r.score
+            : 0;
+
+        const publishedDate =
+          r.publishedDate ||
+          r.pubdate ||
+          null;
+
+        const category =
+          typeof r.category === "string"
+            ? r.category
+            : "general";
+
+        const thumbnail =
+          r.thumbnail ||
+          r.img_src ||
+          null;
+
+        return {
+          title,
+          url,
+          snippet,
+          source,
+          score,
+          publishedDate,
+          category,
+          thumbnail,
+        };
+      })
+      .filter((r: WebSearchResult) => {
+        if (!r.url) return false;
+
+        try {
+          new URL(r.url);
+        } catch {
+          return false;
+        }
+
+        if (seen.has(r.url)) {
+          return false;
+        }
+
+        seen.add(r.url);
+
+        return true;
+      })
+      .sort((a: WebSearchResult, b: WebSearchResult) => {
+        return b.score - a.score;
+      })
+      .slice(0, maxResults);
+
+    if (results.length === 0) {
+      return {
+        content: text(`No usable search results found.`),
+        isError: false,
+      };
+    }
+
+    // Keep tool output compact so follow-up requests stay small and stable.
+    let output = `Search results for "${query}":\n\n`;
+
+    for (const [i, r] of results.entries()) {
+      output += `${i + 1}. ${r.title}\n`;
+      output += `URL: ${r.url}\n`;
+
+      if (r.snippet) {
+        output += `Snippet: ${r.snippet}\n`;
+      }
+
+      output += `Source: ${r.source}\n`;
+
+      if (r.publishedDate) {
+        output += `Published: ${r.publishedDate}\n`;
+      }
+
+      output += `Category: ${r.category}\n`;
+
+      output += "\n";
+    }
+
+    if (answers.length > 0) {
+      output += `Answers:\n`;
+
+      for (const answer of answers.slice(0, 3)) {
+        output += `- ${String(answer)}\n`;
+      }
+
+      output += "\n";
+    }
+
+    if (suggestions.length > 0) {
+      output += `Search suggestions:\n`;
+
+      for (const suggestion of suggestions.slice(0, 5)) {
+        output += `- ${String(suggestion)}\n`;
+      }
+
+      output += "\n";
+    }
+
+    if (infoboxes.length > 0) {
+      output += `Infoboxes:\n`;
+
+      for (const info of infoboxes.slice(0, 2)) {
+        if (info?.infobox) {
+          output += `- ${String(info.infobox)}\n`;
+        }
+      }
+
+      output += "\n";
+    }
+
+    if (output.length > MAX_OUTPUT) {
+      output =
+        output.slice(0, MAX_OUTPUT) +
+        "\n... (truncated)";
+    }
+
+    return {
+      content: text(output.trim()),
+      isError: false,
+    };
+  } catch (err: any) {
+    const message =
+      err?.name === "AbortError"
+        ? "Search request timed out."
+        : err?.message || String(err);
+
+    return {
+      content: text(`Error performing web search: ${message}`),
+      isError: true,
+    };
+  }
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, any>,
@@ -428,7 +923,7 @@ export async function executeTool(
 
   switch (name) {
     case "shell":
-      return executeShell(args as Static<typeof ShellParams>);
+      return executeShell(args as Static<typeof ShellParams>, context);
     case "read_file":
       return executeReadFile(args as Static<typeof ReadFileParams>);
     case "save_credential":
@@ -443,6 +938,10 @@ export async function executeTool(
       return executeSendMessage(args as Static<typeof SendMessageParams>, context);
     case "send_file":
       return executeSendFile(args as Static<typeof SendFileParams>, context);
+    case "web_search":
+      return executeWebSearch(args as Static<typeof WebSearchParams>, context);
+    case "web_fetch":
+      return executeWebFetch(args as Static<typeof WebFetchParams>, context);
     default:
       return { content: text(`Unknown tool: ${name}`), isError: true };
   }

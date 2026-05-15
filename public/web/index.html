@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MinClaw Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: {
+                950: "#101312",
+                900: "#171b19",
+                800: "#222826",
+                700: "#394241",
+                500: "#717d7a",
+                400: "#94a3a0",
+                200: "#d4ddd9",
+                100: "#edf3f0",
+                50: "#f8faf9",
+              },
+              teal: {
+                50: "#edfdf9",
+                100: "#d6f5ee",
+                200: "#b2ece1",
+                500: "#0f766e",
+                600: "#0c625c",
+              },
+              amber: {
+                50: "#fffbeb",
+                100: "#fdf1d0",
+                200: "#fde68a",
+                400: "#fbbf24",
+                500: "#b45309",
+              },
+            },
+            boxShadow: {
+              soft: "0 18px 60px rgba(16, 19, 18, 0.08)",
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      [v-cloak] { display: none; }
+      .tab-content { display: none; }
+      .tab-content.active { display: block; }
+      .tab-btn.active {
+        background-color: #171b19;
+        color: white;
+      }
+    </style>
+  </head>
+  <body class="min-h-screen bg-[radial-gradient(circle_at_top_left,_rgba(15,118,110,0.08),_transparent_28%),radial-gradient(circle_at_top_right,_rgba(180,83,9,0.06),_transparent_24%),linear-gradient(180deg,_#f5efe7,_#eaf2ef)] text-ink-900">
+    <div class="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
+      <header class="mb-8 flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div class="flex items-center gap-4">
+            <img src="/minclaw.svg" class="w-10 h-10" alt="MinClaw Logo" />
+            <div>
+              <div class="flex items-center gap-3">
+                <h1 class="text-3xl font-black tracking-tight">MinClaw</h1>
+                <span id="daemonBadge" class="inline-flex rounded-full bg-teal-50 px-3 py-0.5 text-xs font-bold text-teal-600 ring-1 ring-teal-100 uppercase tracking-wider">Status...</span>
+              </div>
+              <p class="mt-1 text-sm text-ink-500 font-medium">CLI-first AI agent workspace</p>
+            </div>
+          </div>
+        
+        <nav class="flex flex-wrap gap-2 p-1.5 bg-white/50 backdrop-blur-md rounded-2xl border border-white/70 shadow-sm">
+          <button data-tab="overview" class="tab-btn active px-5 py-2.5 rounded-xl text-sm font-bold transition-all hover:bg-ink-100">Overview</button>
+          <button data-tab="sessions" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-bold transition-all hover:bg-ink-100">Sessions</button>
+          <button data-tab="skills" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-bold transition-all hover:bg-ink-100">Skills</button>
+          <button data-tab="jobs" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-bold transition-all hover:bg-ink-100">Jobs</button>
+          <button data-tab="config" class="tab-btn px-5 py-2.5 rounded-xl text-sm font-bold transition-all hover:bg-ink-100">Config</button>
+          <div class="w-px h-6 bg-ink-200 my-auto mx-2"></div>
+          <button id="refreshButton" class="px-5 py-2.5 rounded-xl text-sm font-bold text-teal-600 transition-all hover:bg-teal-50">Refresh</button>
+        </nav>
+      </header>
+
+      <main>
+        <!-- Tab: Overview -->
+        <div id="tab-overview" class="tab-content active space-y-6">
+          <div id="stats" class="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+            <!-- Stats rendered via JS -->
+          </div>
+
+          <div class="grid gap-6 lg:grid-cols-[1.5fr_1fr]">
+            <div class="rounded-3xl border border-white/70 bg-white/70 p-8 shadow-soft backdrop-blur-xl">
+              <div class="mb-6 flex items-center justify-between">
+                <h2 class="text-xl font-bold">Quick Chat</h2>
+                <span class="text-xs font-semibold text-ink-400 uppercase tracking-widest">Web Session</span>
+              </div>
+              <form id="chatForm" class="space-y-4">
+                <div class="relative">
+                  <textarea id="chatInput" rows="4" class="w-full rounded-2xl border border-ink-100 bg-white/80 px-5 py-4 text-sm leading-relaxed outline-none ring-0 placeholder:text-ink-400 focus:border-teal-500 transition-all focus:bg-white" placeholder="Ask something or use a slash command..."></textarea>
+                  <button type="submit" class="absolute bottom-4 right-4 rounded-xl bg-ink-900 px-6 py-2.5 text-sm font-bold text-white shadow-soft transition hover:bg-ink-800">Send</button>
+                </div>
+              </form>
+              <div id="chatLog" class="mt-6 space-y-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                <!-- Chat log rendered via JS -->
+              </div>
+            </div>
+
+            <div class="space-y-6">
+              <div class="rounded-3xl border border-white/70 bg-white/70 p-8 shadow-soft backdrop-blur-xl">
+                <h2 class="text-xl font-bold mb-6">Recent Costs</h2>
+                <div id="costsOverview" class="space-y-4">
+                  <!-- Costs rendered via JS -->
+                </div>
+              </div>
+              
+              <div class="rounded-3xl border border-white/70 bg-white/70 p-8 shadow-soft backdrop-blur-xl">
+                <h2 class="text-xl font-bold mb-4">Daemon Info</h2>
+                <div id="statusMeta" class="grid gap-4 text-sm">
+                  <!-- Meta rendered via JS -->
+                </div>
+                <div id="overviewHint" class="mt-6 pt-4 border-t border-ink-100 text-xs text-ink-400 font-mono"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Sessions -->
+        <div id="tab-sessions" class="tab-content h-[calc(100vh-180px)]">
+          <div class="grid h-full gap-6 lg:grid-cols-[400px_1fr]">
+            <div class="flex flex-col rounded-3xl border border-white/70 bg-white/70 shadow-soft backdrop-blur-xl overflow-hidden">
+              <div class="p-6 border-b border-ink-100">
+                <h2 class="text-xl font-bold">Sessions</h2>
+                <p class="text-sm text-ink-400 mt-1">Browse conversation history</p>
+              </div>
+              <div id="sessions" class="flex-1 overflow-y-auto custom-scrollbar">
+                <!-- Sessions list rendered via JS -->
+              </div>
+            </div>
+
+            <div class="flex flex-col rounded-3xl border border-white/70 bg-white/70 shadow-soft backdrop-blur-xl overflow-hidden">
+              <div class="p-6 border-b border-ink-100 flex items-center justify-between bg-white/40">
+                <div>
+                  <h2 class="text-xl font-bold" id="sessionDetailTitle">Select a session</h2>
+                  <div id="selectedSessionMeta" class="text-xs font-medium text-ink-400 mt-1 uppercase tracking-wider">No session selected</div>
+                </div>
+                <button id="focusSessionButton" class="rounded-xl border border-ink-200 bg-white px-4 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-100 disabled:opacity-50 disabled:cursor-not-allowed">Set as active chat</button>
+              </div>
+              <div id="sessionDetail" class="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar bg-ink-50/30">
+                <div class="flex flex-col items-center justify-center h-full text-ink-300 space-y-4">
+                  <svg class="w-16 h-16 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path></svg>
+                  <p class="text-lg font-medium">Choose a conversation from the left to view details</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Skills -->
+        <div id="tab-skills" class="tab-content space-y-8">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-3xl font-black tracking-tight">Capabilities</h2>
+              <p class="mt-1 text-ink-500 font-medium">Manage and install tools for your agent</p>
+            </div>
+            <button id="syncSkillsButton" class="rounded-2xl bg-ink-900 px-6 py-3 text-sm font-bold text-white shadow-soft transition hover:bg-ink-800">Sync Catalog</button>
+          </div>
+
+          <div id="skillsSummary" class="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <!-- Skills stats rendered via JS -->
+          </div>
+
+          <div id="skills" class="grid gap-6 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <!-- Skills grid rendered via JS -->
+          </div>
+        </div>
+
+        <!-- Tab: Jobs -->
+        <div id="tab-jobs" class="tab-content space-y-8 max-w-5xl mx-auto">
+          <div class="rounded-3xl border border-white/70 bg-white/70 p-8 shadow-soft backdrop-blur-xl">
+            <h2 class="text-2xl font-black mb-6">Schedule Job</h2>
+            <form id="jobForm" class="grid gap-6">
+              <div class="grid gap-4 sm:grid-cols-2">
+                <div class="space-y-2">
+                  <label class="text-xs font-bold uppercase tracking-widest text-ink-400 ml-1">When</label>
+                  <input id="jobWhen" class="w-full rounded-2xl border border-ink-100 bg-white px-5 py-4 text-sm outline-none ring-0 placeholder:text-ink-400 focus:border-teal-500 transition-all" placeholder="in 30 minutes / at 3pm" />
+                </div>
+                <div class="space-y-2">
+                  <label class="text-xs font-bold uppercase tracking-widest text-ink-400 ml-1">Message</label>
+                  <input id="jobMessage" class="w-full rounded-2xl border border-ink-100 bg-white px-5 py-4 text-sm outline-none ring-0 placeholder:text-ink-400 focus:border-teal-500 transition-all" placeholder="Reminder text" />
+                </div>
+              </div>
+              <div class="flex items-center justify-between gap-4 pt-2">
+                <p class="text-xs text-ink-400 italic font-medium">Jobs are scheduled via the default router.</p>
+                <button type="submit" class="rounded-2xl bg-teal-600 px-8 py-3.5 text-sm font-bold text-white shadow-soft transition hover:bg-teal-500">Create Job</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="space-y-6">
+            <h3 class="text-xl font-bold ml-1">Active Jobs</h3>
+            <div id="jobs" class="grid gap-6 md:grid-cols-2">
+              <!-- Jobs rendered via JS -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab: Config -->
+        <div id="tab-config" class="tab-content space-y-6 max-w-5xl mx-auto">
+          <div class="rounded-3xl border border-white/70 bg-white/70 p-8 shadow-soft backdrop-blur-xl">
+            <div class="mb-8 flex items-center justify-between">
+              <div>
+                <h2 class="text-2xl font-black">Configuration</h2>
+                <p class="text-sm text-ink-400 mt-1 font-medium">Edit <span class="font-mono bg-ink-100 px-1.5 py-0.5 rounded text-ink-700">minclaw.json5</span> directly</p>
+              </div>
+              <div class="flex items-center gap-4">
+                <div id="configStatus" class="text-xs font-bold uppercase tracking-widest text-teal-600"></div>
+                <button id="saveConfigButton" class="rounded-2xl bg-amber-500 px-8 py-3.5 text-sm font-bold text-white shadow-soft transition hover:bg-amber-400">Save Changes</button>
+              </div>
+            </div>
+            <div class="relative group">
+              <div class="absolute -inset-0.5 bg-gradient-to-r from-teal-500/20 to-amber-500/20 rounded-2xl blur opacity-30 group-focus-within:opacity-100 transition duration-500"></div>
+              <textarea id="configEditor" rows="22" class="relative w-full rounded-2xl border border-ink-100 bg-white px-6 py-6 font-mono text-sm leading-relaxed outline-none ring-0 focus:border-teal-500/50 transition-all custom-scrollbar"></textarea>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <style>
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #d4ddd9;
+        border-radius: 10px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: #94a3a0;
+      }
+    </style>
+    <script src="/dashboard.js" type="module"></script>
+  </body>
+</html>

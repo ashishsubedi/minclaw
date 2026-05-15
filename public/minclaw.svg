@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" width="400" height="480">
+  <defs>
+    <linearGradient id="clawGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF5A5F" />
+      <stop offset="100%" stop-color="#E63946" />
+    </linearGradient>
+  </defs>
+
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 90 55 C 90 20, 60 10, 30 20" stroke="#E63946" stroke-width="3" fill="none" />
+    <path d="M 110 55 C 110 20, 140 10, 170 20" stroke="#E63946" stroke-width="3" fill="none" />
+
+    <path d="M 80 80 L 55 80 L 45 95" stroke="#E63946" stroke-width="4" fill="none" />
+    <path d="M 80 95 L 55 95 L 45 110" stroke="#E63946" stroke-width="4" fill="none" />
+    <path d="M 80 110 L 55 110 L 45 125" stroke="#E63946" stroke-width="4" fill="none" />
+
+    <path d="M 120 80 L 145 80 L 155 95" stroke="#E63946" stroke-width="4" fill="none" />
+    <path d="M 120 95 L 145 95 L 155 110" stroke="#E63946" stroke-width="4" fill="none" />
+    <path d="M 120 110 L 145 110 L 155 125" stroke="#E63946" stroke-width="4" fill="none" />
+
+    <path d="M 85 65 Q 65 50 48 70" stroke="#E63946" stroke-width="7" fill="none" />
+    <path d="M 115 65 Q 135 50 152 70" stroke="#E63946" stroke-width="7" fill="none" />
+
+    <path d="M 55 40 C 20 40, 10 80, 30 100 C 40 110, 55 100, 55 90 L 45 75 L 65 55 C 70 50, 65 40, 55 40 Z" fill="url(#clawGrad)" />
+    <path d="M 67 60 C 80 65, 80 85, 65 90 L 50 75 Z" fill="#D90429" />
+
+    <path d="M 145 40 C 180 40, 190 80, 170 100 C 160 110, 145 100, 145 90 L 155 75 L 135 55 C 130 50, 135 40, 145 40 Z" fill="url(#clawGrad)" />
+    <path d="M 133 60 C 120 65, 120 85, 135 90 L 150 75 Z" fill="#D90429" />
+
+    <rect x="80" y="50" width="40" height="55" rx="20" fill="url(#clawGrad)" />
+
+    <circle cx="90" cy="60" r="3" fill="#FFFFFF" />
+    <circle cx="110" cy="60" r="3" fill="#FFFFFF" />
+
+    <rect x="84" y="110" width="32" height="14" rx="6" fill="url(#clawGrad)" />
+    <rect x="87" y="128" width="26" height="14" rx="6" fill="url(#clawGrad)" />
+
+    <path d="M 100 148 L 75 175 C 75 180, 80 182, 85 182 L 100 172 L 115 182 C 120 182, 125 180, 125 175 Z" fill="#D90429" />
+
+  </g>
+
+  <text x="100" y="215" font-family="'Inter', 'Segoe UI', Roboto, Helvetica, sans-serif" font-size="28" font-weight="800" fill="#2B2D42" text-anchor="middle" letter-spacing="1">MinClaw</text>
+</svg>

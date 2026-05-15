@@ -1,20 +1,22 @@
 {
-  "name": "nakedclaw",
+  "name": "minclaw",
   "version": "0.2.0",
   "module": "src/cli.ts",
   "type": "module",
   "private": true,
   "bin": {
-    "nakedclaw": "src/cli.ts"
+    "minclaw": "src/cli.ts"
   },
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",
+    "web": "bun run src/web/server.ts",
     "cli": "bun run src/cli.ts",
     "tui": "bun run src/tui/viewer.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.2.1",
     "@types/qrcode-terminal": "^0.12.2"
   },
@@ -28,6 +30,7 @@
     "croner": "^10.0.1",
     "grammy": "^1.39.3",
     "json5": "^2.2.3",
+    "markdown-it": "^14.1.1",
     "qrcode-terminal": "^0.12.0"
   }
 }

@@ -1,20 +1,20 @@
-# NakedClaw
+# MinClaw
 
 A self-improving AI agent reachable via Telegram, WhatsApp, Slack, and terminal. Runs as a background daemon with a CLI chat interface.
 
 ## Project Structure
 
 ```
-nakedclaw/
+minclaw/
 ├── src/
 │   ├── cli.ts                # CLI entry point — dispatches subcommands
 │   ├── index.ts              # Daemon entry point — channels, scheduler, socket server
-│   ├── config.ts             # Loads nakedclaw.json5
+│   ├── config.ts             # Loads minclaw.json5
 │   ├── router.ts             # Message in → command check → agent → reply
 │   ├── agent.ts              # Anthropic API caller (OAuth + API key)
 │   ├── session.ts            # JSONL transcript storage per sender
 │   ├── auth/
-│   │   ├── credentials.ts    # ~/.nakedclaw/credentials.json + token refresh
+│   │   ├── credentials.ts    # ~/.minclaw/credentials.json + token refresh
 │   │   └── oauth.ts          # Anthropic OAuth PKCE flow
 │   ├── brain/
 │   │   └── loader.ts         # Reads brain/ markdown files (system, memory, heartbeat, channels)
@@ -49,7 +49,7 @@ nakedclaw/
 │   ├── permanent-memory.md   # Persistent knowledge (user-curated facts/notes)
 │   ├── heartbeat.md          # Instructions for heartbeat cron
 │   └── channels.md           # Per-channel behavior rules
-├── nakedclaw.json5           # Config (workspace dir)
+├── minclaw.json5           # Config (workspace dir)
 ├── skills/                   # Cached skill files from openclaw (gitignored)
 │   ├── catalog.json          # Skill index
 │   └── <name>/SKILL.md       # Downloaded skill definitions
@@ -61,25 +61,25 @@ nakedclaw/
 ## CLI Usage
 
 ```
-nakedclaw              # Chat with agent (connects to daemon)
-nakedclaw setup        # Configure credentials (OAuth or API key)
-nakedclaw start        # Start daemon in background
-nakedclaw stop         # Stop daemon
-nakedclaw restart      # Restart daemon
-nakedclaw status       # Show daemon status
-nakedclaw logs         # Show daemon logs
-nakedclaw skills       # List skills with eligibility status
-nakedclaw skills sync  # Fetch catalog from GitHub
-nakedclaw skills install <name>  # Install a skill's deps
-nakedclaw skills info <name>     # Show skill details
+minclaw              # Chat with agent (connects to daemon)
+minclaw setup        # Configure credentials (OAuth or API key)
+minclaw start        # Start daemon in background
+minclaw stop         # Stop daemon
+minclaw restart      # Restart daemon
+minclaw status       # Show daemon status
+minclaw logs         # Show daemon logs
+minclaw skills       # List skills with eligibility status
+minclaw skills sync  # Fetch catalog from GitHub
+minclaw skills install <name>  # Install a skill's deps
+minclaw skills info <name>     # Show skill details
 ```
 
 ## Architecture
 
-- **Daemon** (`src/index.ts`): Runs in background, manages channels, scheduler, heartbeat. Listens on `~/.nakedclaw/daemon.sock` (Unix socket, NDJSON protocol).
-- **CLI** (`src/cli.ts`): Dispatches to subcommands. `nakedclaw` (no args) = chat.
+- **Daemon** (`src/index.ts`): Runs in background, manages channels, scheduler, heartbeat. Listens on `~/.minclaw/daemon.sock` (Unix socket, NDJSON protocol).
+- **CLI** (`src/cli.ts`): Dispatches to subcommands. `minclaw` (no args) = chat.
 - **Chat** (`src/cli/chat.ts`): REPL that connects to daemon socket. Each terminal gets session `terminal:<pid>`.
-- **Auth**: Anthropic OAuth PKCE or plain API key. Stored in `~/.nakedclaw/credentials.json`. Env var `ANTHROPIC_API_KEY` always takes priority.
+- **Auth**: Anthropic OAuth PKCE or plain API key. Stored in `~/.minclaw/credentials.json`. Env var `ANTHROPIC_API_KEY` always takes priority.
 
 ## Skills
 
@@ -92,7 +92,7 @@ Skills are specialized instruction sets from the [openclaw](https://github.com/o
 
 ## State Directories
 
-- `~/.nakedclaw/` — credentials, PID file, socket, logs
+- `~/.minclaw/` — credentials, PID file, socket, logs
 - `./skills/` — cached skill definitions (from openclaw catalog)
 - `./memory/` — chat markdown files
 - `./sessions/` — JSONL transcripts
@@ -100,5 +100,5 @@ Skills are specialized instruction sets from the [openclaw](https://github.com/o
 ## Runtime
 
 - Use Bun, not Node.js
-- `bun link` to install `nakedclaw` globally
-- Config watcher: daemon reloads heartbeat/scheduler on `nakedclaw.json5` change; channel changes require restart
+- `bun link` to install `minclaw` globally
+- Config watcher: daemon reloads heartbeat/scheduler on `minclaw.json5` change; channel changes require restart

@@ -1,7 +1,8 @@
 {
   model: {
-    provider: 'openai-codex',
-    name: 'gpt-5.3-codex',
+    provider: 'ollama',
+    name: 'gpt-oss:20b-cloud',
+    baseUrl: 'http://localhost:11434/v1',
   },
   workspace: '.',
   channels: {
@@ -10,7 +11,7 @@
       allowFrom: [],
     },
     whatsapp: {
-      enabled: true,
+      enabled: false,
       allowFrom: [],
     },
     slack: {
@@ -21,6 +22,7 @@
   sessions: {
     dir: './sessions',
     maxTurns: 50,
+    maxToolIterations: 50,
   },
   memory: {
     dir: './memory',

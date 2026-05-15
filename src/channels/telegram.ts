@@ -17,6 +17,33 @@ export function createTelegramAdapter(config: ChannelConfig): ChannelAdapter {
   const bot = new Bot(token);
   let handler: ((msg: IncomingMessage, reply: ReplyFn) => void) | null = null;
 
+  async function sendTextWithFallback(chatId: number, text: string): Promise<number[]> {
+    const chunks = splitMessage(text, 4096);
+    const ids: number[] = [];
+    for (const chunk of chunks) {
+      try {
+        const msg = await bot.api.sendMessage(chatId, chunk, { parse_mode: "Markdown" });
+        ids.push(msg.message_id);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.toLowerCase().includes("can't parse entities")) {
+          const fallback = await bot.api.sendMessage(chatId, chunk);
+          ids.push(fallback.message_id);
+        } else {
+          throw err;
+        }
+      }
+    }
+    return ids;
+  }
+
+  function isMetaMessage(text: string): boolean {
+    if (text.startsWith("Thinking...")) return true;
+    if (text.startsWith("Working...")) return true;
+    if (text.startsWith("Running tool:")) return true;
+    return false;
+  }
+
   /**
    * Download a Telegram file by file_id and save to disk.
    */
@@ -206,9 +233,29 @@ export function createTelegramAdapter(config: ChannelConfig): ChannelAdapter {
 
     const reply: ReplyFn = async (replyText: string) => {
       // Telegram has a 4096 char limit per message
-      const chunks = splitMessage(replyText, 4096);
-      for (const chunk of chunks) {
-        await ctx.reply(chunk);
+      const chatId = ctx.chat.id;
+      const isMeta = isMetaMessage(replyText);
+      const metaKey = String(chatId);
+      if (!("__metaMessageIds" in (ctx as any))) {
+        (ctx as any).__metaMessageIds = new Map<string, number[]>();
+      }
+      const metaMessageIds: Map<string, number[]> = (ctx as any).__metaMessageIds;
+
+      if (isMeta) {
+        const ids = await sendTextWithFallback(chatId, replyText);
+        const existing = metaMessageIds.get(metaKey) || [];
+        metaMessageIds.set(metaKey, existing.concat(ids));
+        return;
+      }
+
+      await sendTextWithFallback(chatId, replyText);
+
+      const toDelete = metaMessageIds.get(metaKey) || [];
+      metaMessageIds.delete(metaKey);
+      for (const id of toDelete) {
+        try {
+          await bot.api.deleteMessage(chatId, id);
+        } catch {}
       }
     };
 
@@ -245,10 +292,7 @@ export function createTelegramAdapter(config: ChannelConfig): ChannelAdapter {
             chatId = parsed;
           }
 
-          const chunks = splitMessage(text, 4096);
-          for (const chunk of chunks) {
-            await bot.api.sendMessage(chatId, chunk);
-          }
+          await sendTextWithFallback(chatId, text);
         },
 
         async sendFile({ recipient, filePath, caption }) {

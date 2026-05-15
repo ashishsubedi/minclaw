@@ -62,7 +62,7 @@ export async function transcribeAudio(
 
   if (!apiKey) {
     console.log(
-      "[whisper] No API key found (checked OPENAI_API_KEY, whisper, openai credentials). Run: nakedclaw setup"
+      "[whisper] No API key found (checked OPENAI_API_KEY, whisper, openai credentials). Run: minclaw setup"
     );
     return null;
   }

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 /**
- * Interactive TUI for browsing NakedClaw sessions.
+ * Interactive TUI for browsing MinClaw sessions.
  *
  * Features:
  *   - Live session list with arrow-key navigation
@@ -195,7 +195,7 @@ function renderList() {
 
   // Header
   write(
-    ` ${BOLD}${CYAN}NakedClaw Sessions${RESET}  ${GRAY}${sessions.length} session${sessions.length !== 1 ? "s" : ""}  (live)${RESET}\n`
+    ` ${BOLD}${CYAN}MinClaw Sessions${RESET}  ${GRAY}${sessions.length} session${sessions.length !== 1 ? "s" : ""}  (live)${RESET}\n`
   );
   write(`${GRAY}${"─".repeat(Math.min(cols, 90))}${RESET}\n`);
 
@@ -493,7 +493,7 @@ function startWatcher() {
 // ── Main ──────────────────────────────────────────────────────
 
 if (!process.stdin.isTTY) {
-  console.error("nakedclaw sessions requires an interactive terminal.");
+  console.error("minclaw sessions requires an interactive terminal.");
   process.exit(1);
 }
 

@@ -92,13 +92,36 @@ export async function handleMessage(
   appendChat(msg.channel, msg.sender, "user", agentText);
 
   // Run agent
+  let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastStatusAt = 0;
+  let statusSent = false;
+  const sendStatus = async (statusText: string): Promise<void> => {
+    const now = Date.now();
+    if (now - lastStatusAt < 3000) return;
+    lastStatusAt = now;
+    statusSent = true;
+    await reply(statusText);
+  };
+
   try {
+    if (msg.channel !== "terminal") {
+      statusTimer = setTimeout(() => {
+        void sendStatus("Thinking...");
+      }, 1200);
+    }
+
     const result = await runAgent(
       key,
       agentText,
       msg.attachments,
       reply,
-      { channel: msg.channel, sender: msg.sender }
+      { channel: msg.channel, sender: msg.sender },
+      async (statusText) => {
+        if (!statusSent && msg.channel !== "terminal") {
+          await sendStatus("Working...");
+        }
+        await sendStatus(statusText);
+      }
     );
 
     // Log tool calls to chat history
@@ -118,6 +141,7 @@ export async function handleMessage(
       role: "assistant",
       content: result.text,
       timestamp: Date.now(),
+      usage: result.usage,
     });
     appendChat(msg.channel, msg.sender, "assistant", result.text);
 
@@ -126,6 +150,11 @@ export async function handleMessage(
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[router] Agent error: ${errMsg}`);
     await reply(`Error: ${errMsg}`);
+  } finally {
+    if (statusTimer) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
   }
 }
 
@@ -139,6 +168,12 @@ async function handleCommand(
   const arg = args.join(" ");
 
   switch (cmd) {
+    case "/help":
+    case "/commands": {
+      await reply(getHelpText());
+      return true;
+    }
+
     case "/reset": {
       clearSession(sessionKey);
       await reply("Session cleared.");
@@ -150,7 +185,7 @@ async function handleCommand(
       const heartbeat = getHeartbeatStatus();
       const jobs = listJobs();
 
-      let status = `NakedClaw Status\n`;
+      let status = `MinClaw Status\n`;
       status += `Sessions: ${sessions.length}\n`;
       status += `Scheduled jobs: ${jobs.length}\n`;
       status += `Heartbeat: ${heartbeat.enabled ? "on" : "off"}`;
@@ -305,6 +340,26 @@ async function handleCommand(
     default:
       return false; // Unknown command — let agent handle it
   }
+}
+
+function getHelpText(): string {
+  return (
+    "Here’s a quick reference to the commands you can use:\n\n" +
+    "**General commands**\n" +
+    "- /help – show this help\n" +
+    "- /reset – clear the current session\n" +
+    "- /status – show system status\n" +
+    "- /memory – show memory index\n" +
+    "- /search <query> – search all chat history\n" +
+    "- /schedule <time> <message> – schedule a reminder\n" +
+    "- /jobs – list scheduled jobs\n" +
+    "- /cancel <id> – cancel a scheduled job\n" +
+    "- /heartbeat – show heartbeat status\n" +
+    "- /skills – list available skills\n" +
+    "- /skills sync – refresh skill catalog from GitHub\n" +
+    "- /skills install <name> – install a skill’s dependencies\n\n" +
+    "**Attachments** – send audio, images, or documents and I’ll process them."
+  );
 }
 
 function tryParseSchedule(
