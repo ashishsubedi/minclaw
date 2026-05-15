@@ -249,10 +249,31 @@ export async function runAgent(
   }
 
   const config = loadConfig();
-  const provider = config.model.provider || "anthropic";
-  let apiKey = await getApiKeyForProvider(provider);
-  if (provider === "ollama" && !apiKey) {
-    apiKey = "ollama";
+
+  // Resolve all models (primary + fallbacks)
+  const configs = [
+    { provider: config.model.provider || "anthropic", name: config.model.name, baseUrl: config.model.baseUrl },
+    ...(config.model.fallbacks || []),
+  ];
+
+  const resolvedModels: Array<{ model: Model<any>; apiKey: string; provider: string }> = [];
+  for (const c of configs) {
+    let apiKey = await getApiKeyForProvider(c.provider);
+    if (c.provider === "ollama" && !apiKey) apiKey = "ollama";
+    
+    const model = c.provider === "ollama"
+      ? buildOllamaModel(c.name, normalizeOllamaBaseUrl(c.baseUrl))
+      : getModel(c.provider as any, c.name as any);
+      
+    if (model && apiKey) {
+      resolvedModels.push({ model, apiKey, provider: c.provider });
+    } else {
+      debugLog(`Warning: Could not resolve model ${c.provider}/${c.name} (missing model or API key)`);
+    }
+  }
+
+  if (resolvedModels.length === 0 || !resolvedModels[0]) {
+    throw new Error("No valid models could be resolved (check config and API keys).");
   }
 
   // Rebuild memory index so agent has fresh context
@@ -261,28 +282,11 @@ export async function runAgent(
   // Get conversation history
   const history = getMessages(sessionKey);
 
-  // Resolve the model through pi-ai (needed before building messages for the API string)
-  const modelRef = config.model.name as any;
-  const model = provider === "ollama"
-    ? buildOllamaModel(modelRef, normalizeOllamaBaseUrl(config.model.baseUrl))
-    : getModel(provider as any, modelRef);
-  if (!model) {
-    throw new Error(`Model not found: ${provider}/${modelRef}`);
-  }
-
-  // Build messages for the API
+  // Build messages for the API using the primary model's info
   const systemPrompt = await buildSystemPrompt(config.workspace, memoryContext);
-  const supportsVision = model.input.includes("image");
-  const messages = historyToApiMessages(history, userMessage, model.api, provider, supportsVision, attachments);
-
-  // Only pass temperature for non-reasoning models (OpenAI reasoning models reject it)
-  const options: Record<string, any> = {
-    apiKey,
-    maxTokens: 4096,
-  };
-  if (!model.reasoning) {
-    options.temperature = 0.7;
-  }
+  const primary = resolvedModels[0];
+  const supportsVision = primary.model.input.includes("image");
+  const messages = historyToApiMessages(history, userMessage, primary.model.api, primary.provider, supportsVision, attachments);
 
   const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 25;
   const toolCallLog: AgentResponse["toolCalls"] = [];
@@ -294,60 +298,93 @@ export async function runAgent(
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const context = { systemPrompt, messages, tools: allTools };
-    debugLog(
-      `call ${i + 1}/${MAX_TOOL_ITERATIONS} provider=${provider} model=${model.id} api=${model.api} ` +
-      `messages=${messages.length} tools=${allTools.length} attachments=${attachments?.length || 0}`
-    );
-    debugPayload("request context", {
-      provider,
-      model: model.id,
-      api: model.api,
-      systemPrompt: truncateLog(systemPrompt, 1200),
-      messages: messages.slice(-8).map((message) => summarizeMessage(message, model)),
-      tools: allTools.map((tool) => ({ name: tool.name, description: tool.description })),
-    });
+    
+    let res: Message | undefined;
+    let lastError: Error | null = null;
+    let successfulModelConfig: (typeof resolvedModels)[0] | undefined;
 
-    let res;
-    try {
-      res = await completeSimple(
-        model,
-        context,
-        {
-          ...options,
-          onPayload: (payload) => debugPayload("provider payload", payload),
-        }
+    for (const rm of resolvedModels) {
+      const { model: currentModel, apiKey: currentApiKey } = rm;
+
+      debugLog(
+        `call ${i + 1}/${MAX_TOOL_ITERATIONS} attempt with provider=${rm.provider} model=${currentModel.id} api=${currentModel.api} ` +
+        `messages=${messages.length} tools=${allTools.length} attachments=${attachments?.length || 0}`
       );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      debugLog(`call ${i + 1} threw: ${message}`);
-      throw err;
-    }
+      debugPayload("request context", {
+        provider: rm.provider,
+        model: currentModel.id,
+        api: currentModel.api,
+        systemPrompt: truncateLog(systemPrompt, 1200),
+        messages: messages.slice(-8).map((message) => summarizeMessage(message, currentModel)),
+        tools: allTools.map((tool) => ({ name: tool.name, description: tool.description })),
+      });
 
-    if (res.errorMessage) {
-      debugLog(`call ${i + 1} errorMessage: ${truncateLog(res.errorMessage, 4000)}`);
-      if (res.errorMessage.includes("only authorized for use with Claude Code")) {
-        throw new Error(
-          "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
-          "Fix: set ANTHROPIC_API_KEY or run `minclaw setup` and choose API key auth.\n" +
-          "Get a key at https://console.anthropic.com/settings/keys"
-        );
+      const options: Record<string, any> = {
+        apiKey: currentApiKey,
+        maxTokens: 4096,
+      };
+      if (!currentModel.reasoning) {
+        options.temperature = 0.7;
       }
-      throw new Error(res.errorMessage);
+
+      try {
+        res = await completeSimple(
+          currentModel,
+          context,
+          {
+            ...options,
+            onPayload: (payload) => debugPayload("provider payload", payload),
+          }
+        );
+
+        if (res.role === "assistant" && res.errorMessage) {
+          debugLog(`call ${i + 1} errorMessage from ${currentModel.id}: ${truncateLog(res.errorMessage, 4000)}`);
+          if (res.errorMessage.includes("only authorized for use with Claude Code")) {
+            throw new Error(
+              "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
+              "Fix: set ANTHROPIC_API_KEY or run `minclaw setup` and choose API key auth.\n" +
+              "Get a key at https://console.anthropic.com/settings/keys"
+            );
+          }
+          throw new Error(res.errorMessage);
+        }
+
+        successfulModelConfig = rm;
+        break; // Success!
+      } catch (err) {
+        lastError = err as Error;
+        debugLog(`call ${i + 1} with ${currentModel.id} threw: ${lastError.message}`);
+
+        if (rm === resolvedModels[resolvedModels.length - 1]) {
+           throw lastError;
+        }
+        debugLog("Retrying with fallback model...");
+      }
     }
 
-    lastUsage = summarizeUsage((res as { usage?: unknown }).usage, model);
+    if (!res || res.role !== "assistant" || !successfulModelConfig) {
+       throw lastError || new Error("Failed to get response from any model.");
+    }
+
+    const currentModel = successfulModelConfig.model;
+    const currentProvider = successfulModelConfig.provider;
+
+    lastUsage = summarizeUsage((res as { usage?: unknown }).usage, currentModel);
     debugPayload("usage summary", lastUsage ?? null);
 
     // Push assistant message into conversation for multi-turn tool use
     messages.push(res);
-    debugPayload("response snapshot", summarizeMessage(res, model));
+    debugPayload("response snapshot", summarizeMessage(res, currentModel));
 
     if (VERBOSE) {
-      const responseText = res.content
-        .filter((block) => block.type === "text")
-        .map((block) => ("text" in block ? block.text : ""))
-        .join("\n")
-        .trim();
+      const responseText = Array.isArray(res.content)
+        ? res.content
+            .filter((block) => block.type === "text")
+            .map((block) => ("text" in block ? block.text : ""))
+            .join("\n")
+            .trim()
+        : String(res.content);
+
       console.log(
         `[agent] Model response (stopReason=${res.stopReason || "unknown"}): ` +
         `${truncateLog(responseText || "(no text)")}`
@@ -370,17 +407,21 @@ export async function runAgent(
 
     if (res.stopReason !== "toolUse") {
       // Final text response — extract and return
-      const text =
-        res.content
-          .filter((block) => block.type === "text")
-          .map((block) => ("text" in block ? block.text : ""))
-          .join("\n") || "(no response)";
+      const text = Array.isArray(res.content)
+        ? res.content
+            .filter((block) => block.type === "text")
+            .map((block) => ("text" in block ? block.text : ""))
+            .join("\n") || "(no response)"
+        : String(res.content);
 
       return { text, toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
     }
 
     // Execute each tool call and push results
-    const toolCalls = res.content.filter((block) => block.type === "toolCall");
+    const toolCalls = Array.isArray(res.content)
+      ? res.content.filter((block) => block.type === "toolCall")
+      : [];
+
 
     for (const call of toolCalls) {
       if (call.type !== "toolCall") continue;
@@ -456,8 +497,8 @@ export async function runAgent(
         messages.push({
           role: "assistant",
           content: [{ type: "text", text: confirmPrompt }],
-          api: model.api,
-          provider: provider,
+          api: currentModel.api,
+          provider: currentProvider,
           model: "",
           usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
           stopReason: "stop",

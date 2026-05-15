@@ -12,6 +12,11 @@ export type Config = {
     provider: string;
     name: string;
     baseUrl?: string;
+    fallbacks?: Array<{
+      provider: string;
+      name: string;
+      baseUrl?: string;
+    }>;
   };
   workspace: string;
   channels: {
