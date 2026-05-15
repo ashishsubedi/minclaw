@@ -37,12 +37,47 @@ All the good functionality. None of the clothes. Truly naked.
 - **Scheduler** — natural language scheduling ("remind me at 10", "every day at 9am")
 - **Multiple terminals** — open as many `minclaw` sessions as you want
 - **Config hot-reload** — edit `minclaw.json5` and heartbeat/scheduler update automatically
-- **Skills** — MinClaw reaches its long, naked claw into the [openclaw](https://github.com/openclaw/openclaw) skill catalog and shamelessly steals every single skill. 100% compatible with all openclaw skills — turns out you don't need clothes to be talented
+- **Model Fallbacks** — configure backup models in `minclaw.json5`; if the primary model fails, MinClaw automatically retries with the next one
+- **Web UI** — manage sessions, config, skills, and scheduled jobs from a modern browser interface
+- **Web Search & Fetch** — built-in tools for searching the web (via SearXNG) and fetching page content directly. Requires a running SearXNG instance.
+
+### Setting up SearXNG
+
+The easiest way to run SearXNG is via Docker:
+
+```bash
+docker run -d -p 8080:8080 -v "$(pwd)/searxng:/etc/searxng" \
+  -e "SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml" \
+  searxng/searxng:latest
+```
+
+For a setup with Docker Compose, follow the [Official SearXNG Installation Guide](https://docs.searxng.org/admin/installation-docker.html).
+
+Once running, MinClaw defaults to `http://localhost:8080`. You can customize this by setting `SEARXNG_BASE_URL` in your `.env` file.
+
+- **Usage Summaries** — token usage and estimated cost breakdown for every interaction
+- **Skills** — MinClaw reaches its long, naked claw into the [openclaw](https://github.com/openclaw/openclaw) skill catalog and shamelessly steals every single skill. 100% compatible with all openclaw skills — you can even create your own specialized skills to teach MinClaw new tricks, or simply **ask MinClaw to create a skill for you** during a conversation.
 
 <p align="center">
   <img src="public/sc-Terminal.gif" width="700" alt="MinClaw terminal chat" /><br/>
   Access it via the terminal
 </p>
+
+## Web UI
+
+MinClaw includes a full-featured dashboard for a more visual management experience:
+
+```bash
+bun run web
+```
+
+By default, the dashboard is available at `http://localhost:8787`. Features include:
+- **Live Chat** — chat with the agent directly in the browser
+- **Session Browser** — view history and active sessions from all channels
+- **Config Editor** — hot-edit your `minclaw.json5` configuration
+- **Skill Manager** — browse, sync, and install skills with a single click
+- **Job Manager** — view and cancel scheduled tasks and heartbeats
+- **Memory Search** — search through all indexed past conversations
 
 ## Quick start
 
@@ -67,6 +102,9 @@ MinClaw supports multiple authentication methods:
 - **API key** — paste your `sk-...` key
 - **Codex** (ChatGPT subscription) — browser-based OAuth login, no API key needed
 
+**GitHub Copilot:**
+- **OAuth** (subscription) — browser-based login via `minclaw setup`. Use your existing GitHub Copilot subscription as a powerful, free-ish backend.
+
 **Ollama:**
 - **Local models** — use the OpenAI-compatible endpoint (default `http://localhost:11434/v1`)
 - **Base URL** — set `model.baseUrl` in `minclaw.json5` (optional if using default)
@@ -77,12 +115,12 @@ MinClaw supports multiple authentication methods:
 
 ```
 minclaw              chat with the agent
-minclaw setup        authenticate (Anthropic or OpenAI)
+minclaw setup        authenticate (Anthropic, OpenAI, or GitHub Copilot)
 minclaw models       interactive model/provider picker
 minclaw models set <provider>/<model>  set model directly
-minclaw start        start the background daemon
+minclaw start        start the background daemon (use --verbose for LLM logs)
 minclaw stop         stop the daemon
-minclaw restart      restart the daemon
+minclaw restart      restart the daemon (use --verbose for LLM logs)
 minclaw status       show daemon status
 minclaw logs         tail daemon logs
 minclaw sessions     interactive session browser (live TUI)
@@ -92,7 +130,37 @@ minclaw skills sync  fetch skill catalog from GitHub
 minclaw skills install <name>  install a skill's deps
 minclaw skills info <name>     show skill details
 minclaw help         show help
+
+## Creating Your Own Skills
+
+Skills are modular packages that extend MinClaw's capabilities. A skill lives in its own directory within `skills/` and consists of:
+
+- `SKILL.md` (required): Contains YAML frontmatter (name/description) and Markdown instructions.
+- `scripts/` (optional): Executable scripts (Python, Bash, etc.) the agent can run.
+- `references/` (optional): Documentation or data files the agent can read.
+- `assets/` (optional): Templates or static files the agent can use.
+
+### Anatomy of `SKILL.md`
+
+```markdown
+---
+name: my-cool-skill
+description: Comprehensive description of when the agent should use this skill.
+---
+
+# My Cool Skill
+
+Instructions for the agent on how to use the scripts and resources in this skill.
 ```
+
+The **description** in the frontmatter is the primary way MinClaw decides when to trigger your skill. Be specific!
+
+### Ask MinClaw to Create One
+
+Since MinClaw can edit its own code, it can also create skills for you. Just ask:
+> "Create a skill that helps me manage my local Docker containers using specialized scripts."
+
+To manually create a new skill, simply create a new folder in `skills/` with a `SKILL.md` file. MinClaw will pick it up automatically.
 
 <p align="center">
   <img src="public/minclaw-sessions.png" width="700" alt="MinClaw session browser" /><br/>
@@ -156,6 +224,7 @@ minclaw.json5         project config
 skills/                 stolen openclaw skills (cached locally)
 sessions/               JSONL transcripts per sender
 memory/                 markdown chat history + temporary-memory.md index
+public/web/             Web UI dashboard assets
 ```
 
 Daemon runs in background. CLI clients connect via Unix socket using NDJSON protocol. Multiple terminals supported simultaneously.
