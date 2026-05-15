@@ -134,6 +134,18 @@ function summarizeMessage(message: Message, model?: Model<any>): unknown {
   }
 
   if (message.role === "assistant") {
+    const content = Array.isArray(message.content)
+      ? message.content.map((part) => {
+          if (part.type === "text") {
+            return { type: "text", text: truncateLog(part.text, 120) };
+          }
+          if (part.type === "thinking") {
+            return { type: "thinking", text: truncateLog(part.thinking, 120) };
+          }
+          return { type: "toolCall", name: part.name, id: part.id };
+        })
+      : truncateLog(String(message.content), 120);
+
     return {
       role: "assistant",
       provider: message.provider,
@@ -141,15 +153,7 @@ function summarizeMessage(message: Message, model?: Model<any>): unknown {
       model: message.model,
       stopReason: message.stopReason,
       usage: summarizeUsage((message as { usage?: unknown }).usage, model),
-      content: message.content.map((part) => {
-        if (part.type === "text") {
-          return { type: "text", text: truncateLog(part.text, 120) };
-        }
-        if (part.type === "thinking") {
-          return { type: "thinking", text: truncateLog(part.thinking, 120) };
-        }
-        return { type: "toolCall", name: part.name, id: part.id };
-      }),
+      content,
     };
   }
 
