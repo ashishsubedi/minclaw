@@ -293,7 +293,7 @@ export async function runAgent(
 
   const config = loadConfig();
   const resolvedModels = await resolveModels(config);
-  if (resolvedModels.length === 0) {
+  if (resolvedModels.length === 0 || !resolvedModels[0]) {
     throw new Error("No valid models could be resolved (check config and API keys).");
   }
 
@@ -363,7 +363,7 @@ export async function runAgent(
       { systemPrompt, messages, tools: allTools },
       { 
         maxTokens: 4096, 
-        temperature: resolvedModels[0].model.reasoning ? undefined : 0.7 
+        temperature: primary.model.reasoning ? undefined : 0.7 
       }
     );
 
