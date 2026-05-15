@@ -23,6 +23,7 @@ export type Config = {
     telegram: ChannelConfig;
     whatsapp: ChannelConfig;
     slack: ChannelConfig;
+    opencode: ChannelConfig;
   };
   sessions: {
     dir: string;

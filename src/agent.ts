@@ -54,7 +54,7 @@ function getEstimatedCopilotPricingModel(model: Model<any>): Model<any> | undefi
   return getModel("openai" as any, model.id) || getModel("openai-codex" as any, model.id);
 }
 
-function truncateLog(text: string, maxLen = 2000): string {
+function truncateLog(text: string, maxLen = 500): string {
   if (text.length <= maxLen) return text;
   return `${text.slice(0, maxLen)}... (truncated)`;
 }
@@ -68,11 +68,21 @@ function debugPayload(label: string, payload: unknown): void {
   if (!DEBUG_LLM) return;
   let serialized = "";
   try {
-    serialized = JSON.stringify(payload, null, 2);
+    if (typeof payload === "object" && payload !== null) {
+      // Create a shallow copy or specific summary for common large objects
+      serialized = JSON.stringify(payload, (key, value) => {
+        if (key === "content" && typeof value === "string") return truncateLog(value, 200);
+        if (key === "systemPrompt") return truncateLog(String(value), 200);
+        if (key === "data" && typeof value === "string" && value.length > 100) return `[base64 data: ${value.length} chars]`;
+        return value;
+      }, 2);
+    } else {
+      serialized = String(payload);
+    }
   } catch (err) {
     serialized = `[unserializable payload: ${err instanceof Error ? err.message : String(err)}]`;
   }
-  debugLog(`${label}: ${truncateLog(serialized, 8000)}`);
+  debugLog(`${label}: ${truncateLog(serialized, 2000)}`);
 }
 
 function summarizeUsage(usage: unknown, model?: Model<any>): UsageSummary | undefined {
@@ -197,6 +207,75 @@ function setPendingConfirmation(sessionKey: string, command: string): void {
   pendingShellConfirmations.set(sessionKey, { command, timestamp: Date.now() });
 }
 
+type ResolvedModel = {
+  model: Model<any>;
+  apiKey: string;
+  provider: string;
+};
+
+async function resolveModels(config: ReturnType<typeof loadConfig>): Promise<ResolvedModel[]> {
+  const configs = [
+    { provider: config.model.provider || "anthropic", name: config.model.name, baseUrl: config.model.baseUrl },
+    ...(config.model.fallbacks || []),
+  ];
+
+  const resolved: ResolvedModel[] = [];
+  for (const c of configs) {
+    let apiKey = await getApiKeyForProvider(c.provider);
+    if (c.provider === "ollama" && !apiKey) apiKey = "ollama";
+    
+    const model = c.provider === "ollama"
+      ? buildOllamaModel(c.name, normalizeOllamaBaseUrl(c.baseUrl))
+      : getModel(c.provider as any, c.name as any);
+      
+    if (model && apiKey) {
+      resolved.push({ model, apiKey, provider: c.provider });
+    } else {
+      debugLog(`Warning: Could not resolve model ${c.provider}/${c.name} (missing model or API key)`);
+    }
+  }
+  return resolved;
+}
+
+async function callModelWithFallback(
+  resolvedModels: ResolvedModel[],
+  context: { systemPrompt: string; messages: Message[]; tools: any[] },
+  options: { temperature?: number; maxTokens?: number }
+): Promise<{ response: Message; successfulConfig: ResolvedModel }> {
+  let lastError: Error | null = null;
+
+  for (const rm of resolvedModels) {
+    const { model, apiKey } = rm;
+    debugLog(`Attempting model ${model.id} (provider=${rm.provider}, api=${model.api})`);
+    
+    try {
+      const res = await completeSimple(model, context, {
+        ...options,
+        apiKey,
+        onPayload: (payload) => debugPayload("provider payload", payload),
+      });
+
+      if (res.role === "assistant" && res.errorMessage) {
+        if (res.errorMessage.includes("only authorized for use with Claude Code")) {
+          throw new Error(
+            "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
+            "Fix: set ANTHROPIC_API_KEY or run `minclaw setup` and choose API key auth.\n" +
+            "Get a key at https://console.anthropic.com/settings/keys"
+          );
+        }
+        throw new Error(res.errorMessage);
+      }
+      return { response: res, successfulConfig: rm };
+    } catch (err) {
+      lastError = err as Error;
+      debugLog(`Model ${model.id} failed: ${lastError.message}`);
+      if (rm === resolvedModels[resolvedModels.length - 1]) throw lastError;
+      debugLog("Retrying with fallback model...");
+    }
+  }
+  throw lastError || new Error("Failed to get response from any model.");
+}
+
 export async function runAgent(
   sessionKey: string,
   userMessage: string,
@@ -211,315 +290,193 @@ export async function runAgent(
     : colonIdx > 0
       ? { channel: sessionKey.slice(0, colonIdx), sender: sessionKey.slice(colonIdx + 1), reply }
       : undefined;
-  const trimmedMessage = userMessage.trim();
-  const lowerMessage = trimmedMessage.toLowerCase();
-  const isDirectConfirm = trimmedMessage.startsWith("CONFIRM:");
-  const isPlainConfirm = lowerMessage === "confirm";
-
-  if (isPlainConfirm) {
-    const pending = getPendingConfirmation(sessionKey);
-    if (!pending) {
-      return { text: "No pending command to confirm." };
-    }
-    clearPendingConfirmation(sessionKey);
-    const result = await executeTool("shell", { command: `CONFIRM: ${pending}` }, toolContext);
-    const resultText = result.content.map((c) => c.text).join("\n") || "(no output)";
-    return {
-      text: resultText,
-      toolCalls: [{ name: "shell", input: { command: `CONFIRM: ${pending}` }, output: resultText }],
-    };
-  }
-
-  if (isDirectConfirm) {
-    clearPendingConfirmation(sessionKey);
-    const command = trimmedMessage;
-    if (command.length <= "CONFIRM:".length) {
-      return { text: "Please include a command after the prefix." };
-    }
-    const result = await executeTool("shell", { command }, toolContext);
-    const resultText = result.content.map((c) => c.text).join("\n") || "(no output)";
-    return {
-      text: resultText,
-      toolCalls: [{ name: "shell", input: { command }, output: resultText }],
-    };
-  }
-
-  if (trimmedMessage) {
-    clearPendingConfirmation(sessionKey);
-  }
 
   const config = loadConfig();
-
-  // Resolve all models (primary + fallbacks)
-  const configs = [
-    { provider: config.model.provider || "anthropic", name: config.model.name, baseUrl: config.model.baseUrl },
-    ...(config.model.fallbacks || []),
-  ];
-
-  const resolvedModels: Array<{ model: Model<any>; apiKey: string; provider: string }> = [];
-  for (const c of configs) {
-    let apiKey = await getApiKeyForProvider(c.provider);
-    if (c.provider === "ollama" && !apiKey) apiKey = "ollama";
-    
-    const model = c.provider === "ollama"
-      ? buildOllamaModel(c.name, normalizeOllamaBaseUrl(c.baseUrl))
-      : getModel(c.provider as any, c.name as any);
-      
-    if (model && apiKey) {
-      resolvedModels.push({ model, apiKey, provider: c.provider });
-    } else {
-      debugLog(`Warning: Could not resolve model ${c.provider}/${c.name} (missing model or API key)`);
-    }
-  }
-
-  if (resolvedModels.length === 0 || !resolvedModels[0]) {
+  const resolvedModels = await resolveModels(config);
+  if (resolvedModels.length === 0) {
     throw new Error("No valid models could be resolved (check config and API keys).");
   }
 
-  // Rebuild memory index so agent has fresh context
   const memoryContext = rebuildMemoryIndex();
-
-  // Get conversation history
   const history = getMessages(sessionKey);
-
-  // Build messages for the API using the primary model's info
   const systemPrompt = await buildSystemPrompt(config.workspace, memoryContext);
   const primary = resolvedModels[0];
   const supportsVision = primary.model.input.includes("image");
   const messages = historyToApiMessages(history, userMessage, primary.model.api, primary.provider, supportsVision, attachments);
 
-  const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 25;
   const toolCallLog: AgentResponse["toolCalls"] = [];
   const toolCallCounts = new Map<string, number>();
   const MAX_REPEAT_TOOL_CALLS = 3;
-  let consecutiveToolErrors = 0;
+  const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 25;
   const MAX_CONSECUTIVE_TOOL_ERRORS = 4;
+  let consecutiveToolErrors = 0;
   let lastUsage: UsageSummary | undefined;
 
-  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
-    const context = { systemPrompt, messages, tools: allTools };
-    
-    let res: Message | undefined;
-    let lastError: Error | null = null;
-    let successfulModelConfig: (typeof resolvedModels)[0] | undefined;
+  // Handle Confirmation — if user confirms, execute and inject result so loop continues
+  const trimmedMessage = userMessage.trim();
+  const isPlainConfirm = trimmedMessage.toLowerCase() === "confirm";
+  const isDirectConfirm = trimmedMessage.startsWith("CONFIRM:");
 
-    for (const rm of resolvedModels) {
-      const { model: currentModel, apiKey: currentApiKey } = rm;
+  if (isPlainConfirm || isDirectConfirm) {
+    let commandToRun = "";
+    if (isPlainConfirm) {
+      commandToRun = getPendingConfirmation(sessionKey) || "";
+    } else {
+      commandToRun = trimmedMessage.slice("CONFIRM:".length).trim();
+    }
 
-      debugLog(
-        `call ${i + 1}/${MAX_TOOL_ITERATIONS} attempt with provider=${rm.provider} model=${currentModel.id} api=${currentModel.api} ` +
-        `messages=${messages.length} tools=${allTools.length} attachments=${attachments?.length || 0}`
-      );
-      debugPayload("request context", {
-        provider: rm.provider,
-        model: currentModel.id,
-        api: currentModel.api,
-        systemPrompt: truncateLog(systemPrompt, 1200),
-        messages: messages.slice(-8).map((message) => summarizeMessage(message, currentModel)),
-        tools: allTools.map((tool) => ({ name: tool.name, description: tool.description })),
+    if (commandToRun) {
+      clearPendingConfirmation(sessionKey);
+      if (status) await status(`Running confirmed command: ${commandToRun}`);
+      const result = await executeTool("shell", { command: `CONFIRM: ${commandToRun}` }, toolContext);
+      const resultText = result.content.map((c) => c.text).join("\n") || "(no output)";
+      
+      toolCallLog.push({ name: "shell", input: { command: commandToRun }, output: resultText });
+      
+      const callId = `confirm-${Date.now()}`;
+      messages.push({
+        role: "assistant",
+        content: [{ type: "toolCall", id: callId, name: "shell", arguments: { command: commandToRun } }],
+        api: primary.model.api,
+        provider: primary.provider,
+        model: primary.model.id,
+        stopReason: "toolUse",
+      } as any);
+      messages.push({
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "shell",
+        content: result.content,
+        isError: result.isError,
+        timestamp: Date.now(),
       });
+    } else if (isPlainConfirm) {
+      return { text: "No pending command to confirm." };
+    }
+  } else if (trimmedMessage) {
+    clearPendingConfirmation(sessionKey);
+  }
 
-      const options: Record<string, any> = {
-        apiKey: currentApiKey,
-        maxTokens: 4096,
-      };
-      if (!currentModel.reasoning) {
-        options.temperature = 0.7;
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const { response: res, successfulConfig } = await callModelWithFallback(
+      resolvedModels,
+      { systemPrompt, messages, tools: allTools },
+      { 
+        maxTokens: 4096, 
+        temperature: resolvedModels[0].model.reasoning ? undefined : 0.7 
       }
+    );
 
-      try {
-        res = await completeSimple(
-          currentModel,
-          context,
-          {
-            ...options,
-            onPayload: (payload) => debugPayload("provider payload", payload),
-          }
-        );
-
-        if (res.role === "assistant" && res.errorMessage) {
-          debugLog(`call ${i + 1} errorMessage from ${currentModel.id}: ${truncateLog(res.errorMessage, 4000)}`);
-          if (res.errorMessage.includes("only authorized for use with Claude Code")) {
-            throw new Error(
-              "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
-              "Fix: set ANTHROPIC_API_KEY or run `minclaw setup` and choose API key auth.\n" +
-              "Get a key at https://console.anthropic.com/settings/keys"
-            );
-          }
-          throw new Error(res.errorMessage);
-        }
-
-        successfulModelConfig = rm;
-        break; // Success!
-      } catch (err) {
-        lastError = err as Error;
-        debugLog(`call ${i + 1} with ${currentModel.id} threw: ${lastError.message}`);
-
-        if (rm === resolvedModels[resolvedModels.length - 1]) {
-           throw lastError;
-        }
-        debugLog("Retrying with fallback model...");
-      }
+    if (res.role !== "assistant") {
+      throw new Error("Unexpected non-assistant response from model.");
     }
 
-    if (!res || res.role !== "assistant" || !successfulModelConfig) {
-       throw lastError || new Error("Failed to get response from any model.");
-    }
-
-    const currentModel = successfulModelConfig.model;
-    const currentProvider = successfulModelConfig.provider;
+    const currentModel = successfulConfig.model;
+    const currentProvider = successfulConfig.provider;
 
     lastUsage = summarizeUsage((res as { usage?: unknown }).usage, currentModel);
-    debugPayload("usage summary", lastUsage ?? null);
-
-    // Push assistant message into conversation for multi-turn tool use
     messages.push(res);
-    debugPayload("response snapshot", summarizeMessage(res, currentModel));
 
     if (VERBOSE) {
-      const responseText = Array.isArray(res.content)
-        ? res.content
-            .filter((block) => block.type === "text")
-            .map((block) => ("text" in block ? block.text : ""))
-            .join("\n")
-            .trim()
-        : String(res.content);
-
-      console.log(
-        `[agent] Model response (stopReason=${res.stopReason || "unknown"}): ` +
-        `${truncateLog(responseText || "(no text)")}`
-      );
-      if (lastUsage) {
-        const cost = lastUsage.cost;
-        const usageLine =
-          `input=${lastUsage.input ?? 0} output=${lastUsage.output ?? 0} cacheRead=${lastUsage.cacheRead ?? 0} ` +
-          `cacheWrite=${lastUsage.cacheWrite ?? 0} totalTokens=${lastUsage.totalTokens ?? 0}` +
-          (cost ? ` cost=${cost.total ?? 0}` : "");
-        console.log(`[agent] Usage (${lastUsage.costSource ?? "unknown"}): ${usageLine}`);
-        if (cost) {
-          console.log(
-            `[agent] Cost breakdown: input=${cost.input ?? 0} output=${cost.output ?? 0} ` +
-            `cacheRead=${cost.cacheRead ?? 0} cacheWrite=${cost.cacheWrite ?? 0} total=${cost.total ?? 0}`
-          );
+      const parts: string[] = [];
+      if (Array.isArray(res.content)) {
+        for (const block of res.content) {
+          if (block.type === "text") parts.push(block.text);
+          if (block.type === "thinking") parts.push(`[Thinking: ${truncateLog(block.thinking, 100)}]`);
+          if (block.type === "toolCall") parts.push(`[Tool Call: ${block.name}(${JSON.stringify(block.arguments)})]`);
         }
+      } else {
+        parts.push(String(res.content));
+      }
+      
+      const responsePreview = parts.join(" ").trim();
+      console.log(`[agent] ${currentModel.id} response (stopReason=${res.stopReason}): ${truncateLog(responsePreview || "(empty)", 300)}`);
+      
+      if (lastUsage) {
+        const { cost, costSource, ...u } = lastUsage;
+        console.log(`[agent] Usage (${costSource}): input=${u.input} output=${u.output} total=${u.totalTokens}${cost ? ` cost=${cost.total}` : ""}`);
       }
     }
 
     if (res.stopReason !== "toolUse") {
-      // Final text response — extract and return
       const text = Array.isArray(res.content)
-        ? res.content
-            .filter((block) => block.type === "text")
-            .map((block) => ("text" in block ? block.text : ""))
-            .join("\n") || "(no response)"
+        ? res.content.filter((b) => b.type === "text").map((b) => ("text" in b ? b.text : "")).join("\n") || "(no response)"
         : String(res.content);
-
       return { text, toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
     }
 
-    // Execute each tool call and push results
-    const toolCalls = Array.isArray(res.content)
-      ? res.content.filter((block) => block.type === "toolCall")
-      : [];
-
-
+    const toolCalls = Array.isArray(res.content) ? res.content.filter((b) => b.type === "toolCall") : [];
     for (const call of toolCalls) {
       if (call.type !== "toolCall") continue;
+
       const callSignature = `${call.name}:${JSON.stringify(call.arguments)}`;
       const seen = (toolCallCounts.get(callSignature) || 0) + 1;
       toolCallCounts.set(callSignature, seen);
+
       if (seen > MAX_REPEAT_TOOL_CALLS) {
-          return {
-          text:
-            "I got stuck repeating the same tool call and stopped. " +
-            "Try a different approach or give a more specific instruction.",
-            toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
-            usage: lastUsage,
+        return {
+          text: "I got stuck repeating the same tool call. Please provide more specific instructions.",
+          toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+          usage: lastUsage,
         };
       }
-      if (status) {
-        try {
-          const input = JSON.stringify(call.arguments);
-          await status(`Running tool: ${call.name}\n${input}`);
-        } catch {}
-      }
+
+      if (status) await status(`Running tool: ${call.name}`);
       const result = await executeTool(call.name, call.arguments, toolContext);
       const resultText = result.content.map((c) => c.text).join("\n");
 
       if (VERBOSE) {
-        console.log(
-          `[agent] Tool result (${call.name}, error=${result.isError}): ` +
-          `${truncateLog(resultText || "(no output)")}`
-        );
+        console.log(`[agent] Tool ${call.name} result (error=${result.isError}): ${truncateLog(resultText, 100)}`);
       }
 
+      toolCallLog.push({ name: call.name, input: call.arguments, output: resultText });
+
       if (result.isError) {
-        consecutiveToolErrors += 1;
+        consecutiveToolErrors++;
         if (consecutiveToolErrors >= MAX_CONSECUTIVE_TOOL_ERRORS) {
           return {
-            text:
-              "I hit several tool errors in a row and stopped. " +
-              "If you want me to try a different approach, please clarify the request.",
+            text: "I encountered multiple consecutive tool errors and stopped to prevent further issues.",
             toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
             usage: lastUsage,
           };
+        }
+
+        // Special case: Shell command blocked, needs confirmation
+        if (call.name === "shell" && (resultText.includes("Blocked a potentially destructive command") || resultText.includes("Blocked a command that accesses the network"))) {
+          const original = String((call.arguments as { command?: string }).command || "").trim();
+          setPendingConfirmation(sessionKey, original);
+          
+          const confirmPrompt = `I need your confirmation to run:\n\nCONFIRM: ${original}\n\nReply with 'confirm' to proceed.`;
+          
+          // Add the confirmation request to the conversation history so the agent remembers it asked
+          messages.push({
+            role: "assistant",
+            content: [{ type: "text", text: confirmPrompt }],
+            api: currentModel.api,
+            provider: currentProvider,
+            model: currentModel.id,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          } as any);
+
+          return { text: confirmPrompt, toolCalls: toolCallLog, usage: lastUsage };
         }
       } else {
         consecutiveToolErrors = 0;
       }
 
-      toolCallLog.push({
-        name: call.name,
-        input: call.arguments,
-        output: resultText,
-      });
-
-      if (
-        call.name === "shell" &&
-        result.isError &&
-        (resultText.includes("Blocked a potentially destructive command") ||
-          resultText.includes("Blocked a command that accesses the network"))
-      ) {
-        const original = String((call.arguments as { command?: string }).command || "").trim();
-        // Save pending confirmation so the user can reply with "confirm" or
-        // the agent can later re-run the command when explicitly confirmed.
-        setPendingConfirmation(sessionKey, original);
-        // Also inject a concise assistant prompt into the conversation so the
-        // model (and user) get a clear one-line confirmation UX. The user can
-        // reply with `confirm` (or `CONFIRM: <command>`) to approve execution.
-        const confirmLine = original ? `CONFIRM: ${original}` : "CONFIRM: <command>";
-        const confirmPrompt = original
-          ? `I need your confirmation to run the following command:\n\n${confirmLine}\n\nReply with 'confirm' to proceed.`
-          : `I need your confirmation to run a command. Reply with 'confirm' to proceed.`;
-
-        // Push a short assistant message into the messages array so the model
-        // will see the prompt in the next iteration and can act accordingly.
-        messages.push({
-          role: "assistant",
-          content: [{ type: "text", text: confirmPrompt }],
-          api: currentModel.api,
-          provider: currentProvider,
-          model: "",
-          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-          stopReason: "stop",
-          timestamp: Date.now(),
-        });
-      }
-
-      const toolResult: ToolResultMessage = {
+      messages.push({
         role: "toolResult",
         toolCallId: call.id,
         toolName: call.name,
         content: result.content,
         isError: result.isError,
         timestamp: Date.now(),
-      };
-      messages.push(toolResult);
+      });
     }
   }
 
-  // If we exhaust iterations, return whatever text we have
-  console.log("[agent] Tool loop hit max iterations");
   return { text: "(max tool iterations reached)", toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
 }
 
