@@ -17,7 +17,8 @@ import {
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.NAKEDCLAW_WEB_PORT || "8787", 10);
-const PUBLIC_DIR = resolve(import.meta.dir, "../../public/web");
+const PUBLIC_ROOT = resolve(import.meta.dir, "../../public");
+const WEB_DIR = join(PUBLIC_ROOT, "web");
 
 type ChatBody = {
   text?: string;
@@ -36,6 +37,10 @@ function contentTypeFor(pathname: string): string {
       return "application/json; charset=utf-8";
     case ".svg":
       return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
     default:
       return "application/octet-stream";
   }
@@ -63,15 +68,22 @@ function text(data: string, status = 200, contentType = "text/plain; charset=utf
 
 async function serveStatic(pathname: string): Promise<Response> {
   const normalized = pathname === "/" ? "/index.html" : pathname;
-  const filePath = join(PUBLIC_DIR, normalized);
-  if (!filePath.startsWith(PUBLIC_DIR) || !existsSync(filePath)) {
+  
+  // Try WEB_DIR first
+  let filePath = join(WEB_DIR, normalized);
+  if (!existsSync(filePath)) {
+    // Try PUBLIC_ROOT (for assets like minclaw.svg)
+    filePath = join(PUBLIC_ROOT, normalized);
+  }
+
+  if (!filePath.startsWith(PUBLIC_ROOT) || !existsSync(filePath)) {
     return text("Not found", 404);
   }
 
   return new Response(Bun.file(filePath), {
     headers: {
       "content-type": contentTypeFor(filePath),
-      "cache-control": pathname.endsWith(".html") || pathname.endsWith(".js") ? "no-store" : "public, max-age=3600",
+      "cache-control": filePath.endsWith(".html") || filePath.endsWith(".js") ? "no-store" : "public, max-age=3600",
     },
   });
 }
