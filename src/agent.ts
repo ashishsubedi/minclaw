@@ -305,7 +305,7 @@ async function callModelWithFallback(
           if (typeof lastMsg.content === "string") {
             promptText = lastMsg.content;
           } else if (Array.isArray(lastMsg.content)) {
-            promptText = lastMsg.content
+            promptText = (lastMsg.content as any[])
               .filter((p) => p.type === "text")
               .map((p: any) => p.text)
               .join("\n");

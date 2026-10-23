@@ -1,0 +1,24 @@
+{
+  name: 'voice-mac',
+  version: '1.0.0',
+  description: 'Whispr Flow-style push-to-talk voice interface for macOS with Notch glow and Kokoro heart TTS',
+  platform: 'darwin',
+  arch: 'arm64',
+  hotkey: 'right-option', // 'right-option' | 'fn' | 'left-option' | 'right-command'
+  ui: {
+    mode: 'notch', // 'notch' | 'bottom'
+    maxTurns: 5,
+    autoHideSeconds: 15,
+  },
+  stt: {
+    engine: 'mlx_whisper',
+    model: 'mlx-community/whisper-tiny',
+    path: '~/.venv-vllm-metal/bin/mlx_whisper',
+  },
+  tts: {
+    engine: 'kokoro',
+    voice: 'af_heart',
+    idleTimeoutSeconds: 45,
+    fallbackToSystem: true,
+  },
+}
