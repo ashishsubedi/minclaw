@@ -4,6 +4,7 @@ import { loadChannels, loadPersistentMemory, loadSystemPrompt } from "./brain/lo
 import { loadSkillsPrompt } from "./skills/loader.ts";
 import { loadConfig } from "./config.ts";
 import { rebuildMemoryIndex } from "./memory/store.ts";
+import { getCompactedState } from "./memory/compaction.ts";
 import { getMessages, type SessionMessage } from "./session.ts";
 import type { Attachment } from "./channels/types.ts";
 import { readImageAsBase64 } from "./media.ts";
@@ -463,7 +464,8 @@ async function callModelWithFallback(
  */
 export async function completeFast(
   prompt: string,
-  systemPrompt = ""
+  systemPrompt = "",
+  maxTokens = 1024
 ): Promise<string> {
   const config = loadConfig();
   const resolvedModels = await resolveModels(config);
@@ -478,7 +480,7 @@ export async function completeFast(
       messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
       tools: [],
     },
-    { temperature: 0.1, maxTokens: 1024 }
+    { temperature: 0.1, maxTokens }
   );
 
   if (typeof response.content === "string") return response.content;
@@ -747,6 +749,15 @@ async function buildSystemPrompt(workspace: string, memoryContext: string, sessi
     parts.push(`## Permanent Memory\n\n${memory}`);
   }
 
+  if (sessionKey) {
+    const compacted = getCompactedState(sessionKey);
+    if (compacted?.summary && compacted.summary.trim()) {
+      parts.push(
+        `## Current Session Summary (Compacted History)\n\nThe following structured summary captures earlier turns in this conversation before the recent messages window:\n\n${compacted.summary.trim()}`
+      );
+    }
+  }
+
   parts.push(`## Temporary Memory Index\n\nRecent conversation summaries:\n\n${memoryContext}`);
 
   return parts.join("\n\n");
@@ -795,9 +806,20 @@ function historyToApiMessages(
       const content = buildUserContent(h.content, h.attachments, supportsVision);
       msgs.push({ role: "user", content, timestamp: now });
     } else if (h.role === "assistant") {
+      let textContent = h.content;
+      if (h.toolCalls && h.toolCalls.length > 0) {
+        const toolSummary = h.toolCalls
+          .map((tc) => {
+            const inputStr = typeof tc.input === "string" ? tc.input : JSON.stringify(tc.input);
+            const outStr = tc.output.length > 300 ? `${tc.output.slice(0, 300)}...` : tc.output;
+            return `- ${tc.name}(${inputStr}) -> ${outStr.replace(/\s+/g, " ").trim()}`;
+          })
+          .join("\n");
+        textContent = `[Tools used in this turn:\n${toolSummary}]\n\n${h.content}`;
+      }
       msgs.push({
         role: "assistant",
-        content: [{ type: "text", text: h.content }],
+        content: [{ type: "text", text: textContent }],
         api,
         provider,
         model: "",

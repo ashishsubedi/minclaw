@@ -32,6 +32,8 @@ export type Config = {
     dir: string;
     maxTurns: number;
     maxToolIterations?: number;
+    keepRecentTurns?: number;
+    compactAfterTurns?: number;
   };
   memory: {
     dir: string;

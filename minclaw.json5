@@ -31,6 +31,8 @@
     dir: './sessions',
     maxTurns: 25,
     maxToolIterations: 15,
+    keepRecentTurns: 8,
+    compactAfterTurns: 16,
   },
   memory: {
     dir: './memory',

@@ -1,6 +1,12 @@
-import { mkdirSync, existsSync, appendFileSync, readFileSync } from "fs";
+import { mkdirSync, existsSync, appendFileSync, readFileSync, unlinkSync } from "fs";
 import { resolve, join } from "path";
 import { loadConfig } from "./config.ts";
+
+export type SessionToolCall = {
+  name: string;
+  input: unknown;
+  output: string;
+};
 
 export type SessionMessage = {
   role: "user" | "assistant" | "system";
@@ -9,6 +15,7 @@ export type SessionMessage = {
   channel?: string;
   sender?: string;
   attachments?: Array<{ type: string; filePath: string; mimeType?: string }>;
+  toolCalls?: SessionToolCall[];
   usage?: {
     input?: number;
     output?: number;
@@ -31,7 +38,7 @@ export type SessionMessage = {
  * Used to feed conversation history to the agent.
  */
 
-function getSessionDir(): string {
+export function getSessionDir(): string {
   const config = loadConfig();
   const dir = resolve(config.sessions.dir);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -47,17 +54,37 @@ export function appendMessage(sessionKey: string, msg: SessionMessage): void {
   appendFileSync(path, JSON.stringify(msg) + "\n", "utf-8");
 }
 
-export function getMessages(sessionKey: string): SessionMessage[] {
+export function getAllMessages(sessionKey: string): SessionMessage[] {
   const path = sessionFilePath(sessionKey);
   if (!existsSync(path)) return [];
 
-  const config = loadConfig();
   const lines = readFileSync(path, "utf-8")
     .split("\n")
     .filter((l) => l.trim());
 
-  const messages = lines.map((l) => JSON.parse(l) as SessionMessage);
+  return lines.map((l) => JSON.parse(l) as SessionMessage);
+}
 
+export function getMessages(sessionKey: string): SessionMessage[] {
+  let messages = getAllMessages(sessionKey);
+  if (messages.length === 0) return [];
+
+  const compactedPath = join(getSessionDir(), `${sessionKey}.compacted.json`);
+  if (existsSync(compactedPath)) {
+    try {
+      const compactedState = JSON.parse(readFileSync(compactedPath, "utf-8"));
+      const count = typeof compactedState?.compactedCount === "number" ? compactedState.compactedCount : 0;
+      if (count > 0 && count <= messages.length) {
+        messages = messages.slice(count);
+      } else if (count > messages.length) {
+        messages = [];
+      }
+    } catch (err) {
+      console.warn(`[session] Failed to read compacted state for ${sessionKey}:`, err);
+    }
+  }
+
+  const config = loadConfig();
   // Respect maxTurns — keep the most recent
   if (messages.length > config.sessions.maxTurns * 2) {
     return messages.slice(-config.sessions.maxTurns * 2);
@@ -66,10 +93,13 @@ export function getMessages(sessionKey: string): SessionMessage[] {
 }
 
 export function clearSession(sessionKey: string): void {
-  const path = sessionFilePath(sessionKey);
-  if (existsSync(path)) {
-    const { unlinkSync } = require("fs");
-    unlinkSync(path);
+  const jsonlPath = sessionFilePath(sessionKey);
+  if (existsSync(jsonlPath)) {
+    unlinkSync(jsonlPath);
+  }
+  const compactedPath = join(getSessionDir(), `${sessionKey}.compacted.json`);
+  if (existsSync(compactedPath)) {
+    unlinkSync(compactedPath);
   }
 }
 

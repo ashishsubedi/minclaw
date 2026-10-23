@@ -1,6 +1,7 @@
 import type { IncomingMessage, ReplyFn } from "./channels/types.ts";
 import { runAgent, clearAgySession } from "./agent.ts";
 import { appendMessage, sessionKeyFromMessage } from "./session.ts";
+import { maybeAutoCompactSession } from "./memory/compaction.ts";
 import {
   appendChat,
   rebuildMemoryIndex,
@@ -153,10 +154,18 @@ export async function handleMessage(
       content: result.text,
       timestamp: Date.now(),
       usage: result.usage,
+      toolCalls: result.toolCalls?.map((tc) => ({
+        name: tc.name,
+        input: tc.input,
+        output: tc.output.length > 400 ? `${tc.output.slice(0, 400)}...` : tc.output,
+      })),
     });
     appendChat(msg.channel, msg.sender, "assistant", result.text);
 
     await reply(result.text);
+
+    // Background auto-compaction
+    void maybeAutoCompactSession(key);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[router] Agent error: ${errMsg}`);

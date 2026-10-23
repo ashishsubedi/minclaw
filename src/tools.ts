@@ -3,6 +3,8 @@ import type { Tool, TextContent } from "@mariozechner/pi-ai";
 import { saveProviderCredential } from "./auth/credentials.ts";
 import { loadConfig } from "./config.ts";
 import { searchMemory, getChatHistory, listSessions } from "./memory/store.ts";
+import { compactSession } from "./memory/compaction.ts";
+import { sessionKeyFromMessage } from "./session.ts";
 import { resolve, dirname } from "path";
 import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "fs";
 import { getChannelSender, detectMediaType, getRegisteredChannels } from "./channels/registry.ts";
@@ -233,6 +235,29 @@ export const calendarTool: Tool<typeof CalendarParams> = {
   parameters: CalendarParams,
 };
 
+const CompactSessionParams = Type.Object({
+  focus: Type.Optional(
+    Type.String({
+      description:
+        "Optional focus instructions specifying what details, decisions, or references to prioritize in the summary",
+    })
+  ),
+  keepRecentTurns: Type.Optional(
+    Type.Number({
+      description: "Number of recent conversation turns to keep uncompacted in raw history (default 8)",
+      minimum: 0,
+      maximum: 25,
+    })
+  ),
+});
+
+export const compactSessionTool: Tool<typeof CompactSessionParams> = {
+  name: "compact_session",
+  description:
+    "Compact earlier conversation turns into a structured rolling summary to free context while preserving critical entity IDs, files, decisions, and constraints.",
+  parameters: CompactSessionParams,
+};
+
 export const allTools: Tool[] = [
   shellTool,
   readFileTool,
@@ -246,6 +271,7 @@ export const allTools: Tool[] = [
   webFetchTool,
   emailTool,
   calendarTool,
+  compactSessionTool,
 ];
 
 // ── Tool execution ────────────────────────────────────────────────
@@ -1024,6 +1050,43 @@ async function executeCalendar(args: Static<typeof CalendarParams>): Promise<Too
   }
 }
 
+async function executeCompactSession(
+  args: Static<typeof CompactSessionParams>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  if (!context?.channel || !context?.sender) {
+    return { content: text("compact_session requires channel and sender context."), isError: true };
+  }
+
+  const sessionKey = sessionKeyFromMessage(context.channel, context.sender);
+  const result = await compactSession(sessionKey, {
+    force: true,
+    focus: args.focus,
+    keepRecentTurns: args.keepRecentTurns ?? 8,
+  });
+
+  if (result.compacted) {
+    return {
+      content: text(
+        `Session successfully compacted (${result.messagesCompacted} messages folded into summary).\n\n${result.state?.summary}`
+      ),
+      isError: false,
+    };
+  } else if (result.state?.summary) {
+    return {
+      content: text(
+        `Session is already compact (${result.state.compactedCount} messages previously compacted). Current summary:\n\n${result.state.summary}`
+      ),
+      isError: false,
+    };
+  } else {
+    return {
+      content: text("Session is already compact (not enough turns to compact)."),
+      isError: false,
+    };
+  }
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, any>,
@@ -1054,6 +1117,8 @@ export async function executeTool(
       return executeEmail(args as Static<typeof EmailParams>);
     case "calendar":
       return executeCalendar(args as Static<typeof CalendarParams>);
+    case "compact_session":
+      return executeCompactSession(args as Static<typeof CompactSessionParams>, context);
     default:
       return { content: text(`Unknown tool: ${name}`), isError: true };
   }
