@@ -383,6 +383,15 @@ async function submitChat(e) {
   input.value = "";
   input.style.height = "auto";
 
+  // Show thinking indicator
+  const log = $("#chatLog");
+  const pendingDiv = document.createElement("div");
+  pendingDiv.id = "chatPendingIndicator";
+  pendingDiv.className =
+    "rounded-2xl border border-ink-100 bg-white/70 px-5 py-3 text-xs italic text-ink-500 shadow-sm animate-pulse mr-8 flex items-center gap-2";
+  pendingDiv.innerHTML = `<span class="inline-block w-2 h-2 rounded-full bg-teal-500 animate-ping"></span> MinClaw is thinking and executing tools...`;
+  if (log) log.prepend(pendingDiv);
+
   try {
     const response = await fetchJSON("/api/chat", {
       method: "POST",
@@ -390,12 +399,19 @@ async function submitChat(e) {
       body: JSON.stringify({ text, sessionKey: "web-dashboard" }),
     });
 
+    if (pendingDiv && pendingDiv.parentNode) {
+      pendingDiv.remove();
+    }
+
     for (const reply of response.replies || []) {
       const isSystem = reply.includes("Thinking") || reply.includes("Working") || reply.includes("Searching");
       pushLog(reply, isSystem ? "system" : "assistant");
     }
     await loadOverview();
   } catch (err) {
+    if (pendingDiv && pendingDiv.parentNode) {
+      pendingDiv.remove();
+    }
     pushLog(err.message, "system");
   }
 }
@@ -443,6 +459,99 @@ async function saveConfig() {
   }
 }
 
+// --- Accounts Management ---
+async function loadEmailAccounts() {
+  const listNode = $("#accountsList");
+  if (!listNode) return;
+  try {
+    const res = await fetchJSON("/api/email/accounts");
+    const accounts = res.accounts || [];
+    if (accounts.length === 0) {
+      listNode.innerHTML = `
+        <div class="rounded-2xl border border-dashed border-ink-200 p-8 text-center bg-white/40">
+          <p class="text-sm font-bold text-ink-700">No email accounts connected yet</p>
+          <p class="text-xs text-ink-400 mt-1">Connect your Google account or university IMAP on the right.</p>
+        </div>
+      `;
+      return;
+    }
+
+    listNode.innerHTML = accounts
+      .map((acc) => {
+        const isGoogle = acc.type === "google";
+        const iconSvg = isGoogle
+          ? `<div class="w-10 h-10 rounded-2xl bg-white flex items-center justify-center shadow-sm border border-ink-100 flex-shrink-0">
+               <svg class="w-5 h-5" viewBox="0 0 24 24">
+                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                 <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+               </svg>
+             </div>`
+          : `<div class="w-10 h-10 rounded-2xl bg-teal-50 flex items-center justify-center shadow-sm border border-teal-100 text-teal-600 text-lg flex-shrink-0">
+               🏛️
+             </div>`;
+
+        const statusBadge =
+          acc.status === "connected"
+            ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full ring-1 ring-teal-200">
+                 <span class="w-1.5 h-1.5 rounded-full bg-teal-500"></span> Connected
+               </span>`
+            : `<span class="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full ring-1 ring-rose-200">
+                 <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span> Error
+               </span>`;
+
+        return `
+          <div class="flex items-center justify-between p-4 rounded-2xl bg-white/80 border border-ink-100 shadow-sm transition hover:shadow-md">
+            <div class="flex items-center gap-3.5 min-w-0">
+              ${iconSvg}
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <h4 class="text-sm font-bold text-ink-900 truncate">${escapeHtml(acc.displayName || acc.email)}</h4>
+                  ${statusBadge}
+                </div>
+                <p class="text-xs text-ink-500 truncate">${escapeHtml(acc.email)}</p>
+                ${acc.imapHost ? `<p class="text-[10px] text-ink-400 font-mono mt-0.5">${escapeHtml(acc.imapHost)}</p>` : ""}
+              </div>
+            </div>
+            <button data-disconnect-id="${escapeHtml(acc.id)}" class="disconnect-btn text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-3 py-1.5 rounded-xl transition">
+              Disconnect
+            </button>
+          </div>
+        `;
+      })
+      .join("");
+
+    $$(".disconnect-btn").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-disconnect-id");
+        if (!confirm(`Are you sure you want to disconnect this account?`)) return;
+        try {
+          await fetchJSON(`/api/email/accounts/${encodeURIComponent(id)}`, { method: "DELETE" });
+          await loadEmailAccounts();
+        } catch (err) {
+          alert(`Failed to disconnect: ${err.message}`);
+        }
+      };
+    });
+  } catch (err) {
+    listNode.innerHTML = `<div class="p-4 text-xs text-rose-600">Failed to load accounts: ${err.message}</div>`;
+  }
+}
+
+function showAccountsAlert(message, type = "success") {
+  const alert = $("#accountsAlert");
+  if (!alert) return;
+  alert.className = `rounded-2xl p-4 text-sm font-bold shadow-sm transition-all ${
+    type === "success"
+      ? "bg-teal-50 text-teal-800 border border-teal-200"
+      : "bg-rose-50 text-rose-800 border border-rose-200"
+  }`;
+  alert.textContent = message;
+  alert.classList.remove("hidden");
+  setTimeout(() => alert.classList.add("hidden"), 8000);
+}
+
 function switchTab(tabId) {
   console.log("Switching to tab:", tabId);
   state.activeTab = tabId;
@@ -457,6 +566,9 @@ function switchTab(tabId) {
   if (btn) btn.classList.add("active");
   
   if (tabId === "config") loadConfig();
+  if (tabId === "accounts") {
+    loadEmailAccounts();
+  }
 }
 
 function wireEvents() {
@@ -497,6 +609,63 @@ function wireEvents() {
       chatInput.style.height = (chatInput.scrollHeight) + "px";
     };
   }
+
+  // --- Accounts Event Wiring ---
+  const refreshAccountsBtn = $("#refreshAccountsButton");
+  if (refreshAccountsBtn) refreshAccountsBtn.onclick = () => loadEmailAccounts();
+
+  const imapForm = $("#imapAccountForm");
+  if (imapForm) {
+    imapForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const email = $("#imapEmail")?.value.trim();
+      const displayName = $("#imapDisplayName")?.value.trim() || email;
+      const host = $("#imapHost")?.value.trim();
+      const port = Number($("#imapPort")?.value) || 993;
+      const user = $("#imapUser")?.value.trim() || email;
+      const pass = $("#imapPass")?.value;
+      const tls = $("#imapTls")?.checked !== false;
+
+      const smtpHost = $("#smtpHost")?.value.trim();
+      const smtpPort = Number($("#smtpPort")?.value) || 465;
+
+      const statusNode = $("#imapFormStatus");
+      const submitBtn = $("#imapSubmitButton");
+
+      if (!email || !host || !pass) return;
+
+      try {
+        if (submitBtn) submitBtn.disabled = true;
+        if (statusNode) statusNode.textContent = "Connecting...";
+
+        await fetchJSON("/api/email/accounts/imap", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            email,
+            displayName,
+            host,
+            port,
+            tls,
+            user,
+            pass,
+            smtpHost: smtpHost || undefined,
+            smtpPort: smtpHost ? smtpPort : undefined,
+          }),
+        });
+
+        if (statusNode) statusNode.textContent = "";
+        imapForm.reset();
+        showAccountsAlert(`University account ${email} connected successfully!`, "success");
+        await loadEmailAccounts();
+      } catch (err) {
+        if (statusNode) statusNode.textContent = "Error: " + err.message;
+        showAccountsAlert(`Failed to connect IMAP account: ${err.message}`, "error");
+      } finally {
+        if (submitBtn) submitBtn.disabled = false;
+      }
+    };
+  }
 }
 
 async function init() {
@@ -504,6 +673,21 @@ async function init() {
   wireEvents();
   await loadOverview();
   await loadConfig();
+
+  // Handle URL hash or query params from OAuth redirects
+  const urlParams = new URLSearchParams(window.location.search);
+  const hash = window.location.hash;
+
+  if (hash.includes("accounts") || urlParams.has("success") || urlParams.has("error")) {
+    switchTab("accounts");
+    if (urlParams.get("success") === "google_connected") {
+      const email = urlParams.get("email") || "Google Account";
+      showAccountsAlert(`Successfully connected ${email}!`, "success");
+    } else if (urlParams.has("error")) {
+      showAccountsAlert(`Connection error: ${urlParams.get("error")}`, "error");
+    }
+    window.history.replaceState({}, document.title, window.location.pathname + "#accounts");
+  }
 }
 
 init().catch(err => {

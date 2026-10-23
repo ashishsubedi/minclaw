@@ -5,6 +5,7 @@ node_modules
 out
 dist
 *.tgz
+extensions/**/bin/
 
 # code coverage
 coverage
@@ -30,6 +31,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # IntelliJ based IDEs
 .idea
 
+# Local configuration override
+minclaw.local.json5
+
 # Finder (MacOS) folder config
 .DS_Store
 
@@ -49,5 +53,8 @@ skills/*
 
 # downloaded media from channels
 media/
+
+# compiled binaries
+main
 
 .docs

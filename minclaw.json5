@@ -1,14 +1,22 @@
 {
   model: {
-    provider: 'ollama',
-    name: 'gpt-oss:20b-cloud',
-    baseUrl: 'http://localhost:11434/v1',
+    provider: 'google',
+    name: 'gemini-3.5-flash-lite',
+    fallbacks: [
+      { provider: 'google', name: 'gemini-3.5-flash' },
+      { provider: 'google', name: 'gemini-3.8-flash' },
+      { provider: 'agy', name: 'gemini-3.8-flash-low' },
+    ],
+  },
+  owner: {
+    channel: 'telegram',
+    recipient: '', // Configured via TELEGRAM_OWNER_ID in .env or minclaw.local.json5
   },
   workspace: '.',
   channels: {
     telegram: {
       enabled: true,
-      allowFrom: [],
+      allowFrom: [], // Configured via TELEGRAM_ALLOWED_USERS in .env or minclaw.local.json5
     },
     whatsapp: {
       enabled: false,
@@ -21,8 +29,10 @@
   },
   sessions: {
     dir: './sessions',
-    maxTurns: 50,
-    maxToolIterations: 50,
+    maxTurns: 25,
+    maxToolIterations: 15,
+    keepRecentTurns: 8,
+    compactAfterTurns: 16,
   },
   memory: {
     dir: './memory',
@@ -32,8 +42,8 @@
     dir: './brain',
   },
   heartbeat: {
-    enabled: false,
-    cronExpr: '0 * * * *',
+    enabled: true,
+    cronExpr: '*/15 * * * *',
   },
   skills: {
     dir: './skills',

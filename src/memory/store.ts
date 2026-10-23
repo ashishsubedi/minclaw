@@ -1,6 +1,7 @@
 import { mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from "fs";
 import { resolve, join } from "path";
 import { loadConfig } from "../config.ts";
+import { getCompactedState } from "./compaction.ts";
 
 export type MemoryEntry = {
   timestamp: number;
@@ -159,9 +160,17 @@ export function rebuildMemoryIndex(): string {
   for (const s of sessions.slice(0, 5)) {
     const content = readFileSync(s.file, "utf-8");
     const lines = content.split("\n");
-    // Grab last 20 lines as a summary
-    const tail = lines.slice(-20).join("\n");
-    md += `### ${s.key}\n\n${tail}\n\n---\n\n`;
+    const colonKey = s.key.replace("-", ":");
+    const compacted = getCompactedState(colonKey);
+    const hasSummary = Boolean(compacted?.summary?.trim());
+    const tailLines = hasSummary ? 12 : 20;
+    const tail = lines.slice(-tailLines).join("\n");
+
+    md += `### ${s.key}\n\n`;
+    if (hasSummary && compacted) {
+      md += `#### Compacted Summary\n\n${compacted.summary.trim()}\n\n`;
+    }
+    md += `${tail}\n\n---\n\n`;
   }
 
   writeFileSync(indexPath, md, "utf-8");

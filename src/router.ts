@@ -1,6 +1,7 @@
 import type { IncomingMessage, ReplyFn } from "./channels/types.ts";
-import { runAgent } from "./agent.ts";
+import { runAgent, clearAgySession } from "./agent.ts";
 import { appendMessage, sessionKeyFromMessage } from "./session.ts";
+import { maybeAutoCompactSession } from "./memory/compaction.ts";
 import {
   appendChat,
   rebuildMemoryIndex,
@@ -27,7 +28,8 @@ import { getAllSkillStatuses } from "./skills/loader.ts";
 
 export async function handleMessage(
   msg: IncomingMessage,
-  reply: ReplyFn
+  reply: ReplyFn,
+  onStatus?: (status: string) => Promise<void> | void
 ): Promise<void> {
   const key = sessionKeyFromMessage(msg.channel, msg.sender);
   const text = msg.text.trim();
@@ -96,6 +98,7 @@ export async function handleMessage(
   let lastStatusAt = 0;
   let statusSent = false;
   const sendStatus = async (statusText: string): Promise<void> => {
+    if (msg.channel === "terminal" || msg.sender.startsWith("voice")) return;
     const now = Date.now();
     if (now - lastStatusAt < 3000) return;
     lastStatusAt = now;
@@ -110,6 +113,8 @@ export async function handleMessage(
       }, 1200);
     }
 
+    const agentStart = Date.now();
+    console.log(`[router] 🚀 Running agent for ${msg.channel}:${msg.sender}...`);
     const result = await runAgent(
       key,
       agentText,
@@ -117,12 +122,19 @@ export async function handleMessage(
       reply,
       { channel: msg.channel, sender: msg.sender },
       async (statusText) => {
-        if (!statusSent && msg.channel !== "terminal") {
-          await sendStatus("Working...");
+        console.log(`[router] Status: ${statusText}`);
+        if (onStatus) {
+          await onStatus(statusText);
+        } else if (msg.channel !== "terminal") {
+          if (!statusSent) {
+            await sendStatus("Working...");
+          }
+          await sendStatus(statusText);
         }
-        await sendStatus(statusText);
       }
     );
+    const elapsed = ((Date.now() - agentStart) / 1000).toFixed(1);
+    console.log(`[router] ✅ Agent completed response for ${msg.channel}:${msg.sender} (${elapsed}s)`);
 
     // Log tool calls to chat history
     if (result.toolCalls && result.toolCalls.length > 0) {
@@ -142,10 +154,18 @@ export async function handleMessage(
       content: result.text,
       timestamp: Date.now(),
       usage: result.usage,
+      toolCalls: result.toolCalls?.map((tc) => ({
+        name: tc.name,
+        input: tc.input,
+        output: tc.output.length > 400 ? `${tc.output.slice(0, 400)}...` : tc.output,
+      })),
     });
     appendChat(msg.channel, msg.sender, "assistant", result.text);
 
     await reply(result.text);
+
+    // Background auto-compaction
+    void maybeAutoCompactSession(key);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error(`[router] Agent error: ${errMsg}`);
@@ -176,6 +196,7 @@ async function handleCommand(
 
     case "/reset": {
       clearSession(sessionKey);
+      clearAgySession(sessionKey);
       await reply("Session cleared.");
       return true;
     }

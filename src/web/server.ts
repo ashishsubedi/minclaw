@@ -14,6 +14,16 @@ import {
   saveDashboardConfig,
   searchDashboardMemory,
 } from "./data.ts";
+import {
+  getEmailAccounts,
+  removeEmailAccount,
+  saveEmailAccount,
+  getGoogleOAuthConfig,
+  saveGoogleOAuthConfig,
+} from "../email/store.ts";
+import { syncHimalayaConfig } from "../email/imap.ts";
+import { listAllUnreadEmails } from "../email/service.ts";
+import type { EmailAccount } from "../email/types.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.NAKEDCLAW_WEB_PORT || "8787", 10);
@@ -184,15 +194,207 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     });
   }
 
+  // --- Email & OAuth APIs ---
+  if (req.method === "GET" && url.pathname === "/api/email/accounts") {
+    const accounts = getEmailAccounts().map((a) => ({
+      id: a.id,
+      type: a.type,
+      email: a.email,
+      displayName: a.displayName,
+      avatarUrl: a.avatarUrl,
+      status: a.status,
+      errorMessage: a.errorMessage,
+      createdAt: a.createdAt,
+      imapHost: a.imap?.host,
+    }));
+    return json({ accounts });
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/email/accounts/")) {
+    const id = decodeURIComponent(url.pathname.slice("/api/email/accounts/".length));
+    const ok = removeEmailAccount(id);
+    return json({ ok });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/email/accounts/imap") {
+    const body = (await req.json()) as {
+      email?: string;
+      displayName?: string;
+      host?: string;
+      port?: number;
+      tls?: boolean;
+      user?: string;
+      pass?: string;
+      smtpHost?: string;
+      smtpPort?: number;
+      smtpTls?: boolean;
+    };
+
+    if (!body.email || !body.host || !body.pass) {
+      return text("Email, host, and password are required", 400);
+    }
+
+    const id = `imap_${body.email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+    const account: EmailAccount = {
+      id,
+      type: "imap",
+      email: body.email.trim(),
+      displayName: body.displayName?.trim() || body.email.trim(),
+      imap: {
+        host: body.host.trim(),
+        port: Number(body.port) || 993,
+        tls: body.tls !== false,
+        user: (body.user || body.email).trim(),
+        pass: body.pass,
+        smtpHost: body.smtpHost?.trim(),
+        smtpPort: body.smtpPort ? Number(body.smtpPort) : 465,
+        smtpTls: body.smtpTls !== false,
+      },
+      createdAt: Date.now(),
+      status: "connected",
+    };
+
+    saveEmailAccount(account);
+    syncHimalayaConfig();
+    return json({ ok: true, account: { id: account.id, email: account.email } });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/email/messages") {
+    const messages = await listAllUnreadEmails(10);
+    return json({ messages });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/email/google/config") {
+    const cfg = getGoogleOAuthConfig();
+    return json({
+      configured: !!cfg,
+      clientId: cfg?.clientId ? `${cfg.clientId.slice(0, 16)}...` : undefined,
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/email/google/config") {
+    const body = (await req.json()) as { clientId?: string; clientSecret?: string };
+    if (!body.clientId || !body.clientSecret) {
+      return text("Client ID and Client Secret are required", 400);
+    }
+    saveGoogleOAuthConfig({
+      clientId: body.clientId.trim(),
+      clientSecret: body.clientSecret.trim(),
+    });
+    return json({ ok: true });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/auth/google/start") {
+    const config = getGoogleOAuthConfig();
+    if (!config) {
+      return text("Google OAuth Client ID & Secret not configured yet", 400);
+    }
+
+    const redirectUri = "http://127.0.0.1:8787/api/auth/google/callback";
+    const scopes = [
+      "openid",
+      "email",
+      "profile",
+      "https://mail.google.com/",
+      "https://www.googleapis.com/auth/calendar",
+    ].join(" ");
+
+    const params = new URLSearchParams({
+      client_id: config.clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope: scopes,
+      access_type: "offline",
+      prompt: "consent",
+    });
+
+    return Response.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`, 302);
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/auth/google/callback") {
+    const code = url.searchParams.get("code");
+    const error = url.searchParams.get("error");
+    if (error) {
+      return Response.redirect(`/#accounts?error=${encodeURIComponent(error)}`, 302);
+    }
+    if (!code) {
+      return text("Missing authorization code", 400);
+    }
+
+    const config = getGoogleOAuthConfig();
+    if (!config) {
+      return text("Google OAuth configuration missing", 500);
+    }
+
+    const redirectUri = "http://127.0.0.1:8787/api/auth/google/callback";
+
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code,
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code",
+      }).toString(),
+    });
+
+    if (!tokenRes.ok) {
+      const err = await tokenRes.text();
+      return Response.redirect(`/#accounts?error=${encodeURIComponent(`Token exchange failed: ${err}`)}`, 302);
+    }
+
+    const tokenData = (await tokenRes.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in: number;
+    };
+
+    // Fetch user info (email, name, picture)
+    const userRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    const userData = (await userRes.json()) as {
+      email?: string;
+      name?: string;
+      picture?: string;
+    };
+
+    const email = userData.email || "unknown@gmail.com";
+    const id = `google_${email.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+    const existing = getEmailAccounts().find((a) => a.id === id);
+
+    const account: EmailAccount = {
+      id,
+      type: "google",
+      email,
+      displayName: userData.name || email,
+      avatarUrl: userData.picture,
+      google: {
+        accessToken: tokenData.access_token,
+        refreshToken: tokenData.refresh_token || existing?.google?.refreshToken || "",
+        expiresAt: Date.now() + tokenData.expires_in * 1000,
+        clientId: config.clientId,
+        clientSecret: config.clientSecret,
+      },
+      createdAt: Date.now(),
+      status: "connected",
+    };
+
+    saveEmailAccount(account);
+    return Response.redirect(`/#accounts?success=google_connected&email=${encodeURIComponent(email)}`, 302);
+  }
+
   return text("Not found", 404);
 }
 
-function startServer(startPort: number): Bun.Server<WebSocket> {
+export function startWebServer(startPort = PORT): Bun.Server<undefined> {
   let lastError: unknown;
 
   for (let candidate = startPort; candidate < startPort + 20; candidate += 1) {
     try {
-      return Bun.serve({
+      const server = Bun.serve({
         hostname: HOST,
         port: candidate,
         async fetch(req) {
@@ -210,6 +412,13 @@ function startServer(startPort: number): Bun.Server<WebSocket> {
           return await serveStatic(url.pathname);
         },
       });
+
+      if (server.port !== PORT) {
+        console.log(`[web] MinClaw web UI port ${PORT} was busy; using http://${HOST}:${server.port}`);
+      } else {
+        console.log(`[web] MinClaw web UI listening on http://${HOST}:${server.port}`);
+      }
+      return server;
     } catch (err) {
       lastError = err;
       if (!(err instanceof Error) || !err.message.includes("EADDRINUSE")) {
@@ -223,10 +432,6 @@ function startServer(startPort: number): Bun.Server<WebSocket> {
     : new Error(`Unable to start web server on ports ${startPort}-${startPort + 19}`);
 }
 
-const server = startServer(PORT);
-
-if (server.port !== PORT) {
-  console.log(`MinClaw web UI port ${PORT} was busy; using http://${HOST}:${server.port}`);
-} else {
-  console.log(`MinClaw web UI listening on http://${HOST}:${server.port}`);
+if (import.meta.main) {
+  startWebServer(PORT);
 }

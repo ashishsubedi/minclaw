@@ -18,6 +18,7 @@ import { startDaemonServer, setActiveChannels, sendToTerminalSession } from "./d
 import { getChannelSender } from "./channels/registry.ts";
 import { getStateDir, ensureStateDir } from "./auth/credentials.ts";
 import { PID_FILENAME } from "./daemon/protocol.ts";
+import { startWebServer } from "./web/server.ts";
 
 /**
  * MinClaw — daemon entry point.
@@ -40,6 +41,16 @@ async function main() {
 
   // --- Daemon socket server ---
   const daemonServer = startDaemonServer();
+
+  // --- Web UI server ---
+  let webServer: ReturnType<typeof startWebServer> | null = null;
+  if (config.web?.enabled !== false) {
+    try {
+      webServer = startWebServer(config.web?.port);
+    } catch (err) {
+      console.warn(`[web] Failed to start web dashboard: ${err}`);
+    }
+  }
 
   // --- Scheduler ---
   initScheduler();
@@ -76,7 +87,28 @@ async function main() {
   // --- Heartbeat ---
   const heartbeatCallback = async (prompt: string) => {
     try {
-      const result = await runAgent("heartbeat:system", prompt);
+      const currentConfig = loadConfig();
+      const owner = currentConfig.owner;
+      if (!owner?.recipient) {
+        console.log("[heartbeat] No owner recipient configured. Skipping proactive alert.");
+        return;
+      }
+      const replyFn = async (text: string) => {
+        const sender = getChannelSender(owner.channel);
+        if (sender?.sendText) {
+          await sender.sendText({ recipient: owner.recipient, text });
+        } else {
+          console.log(`[heartbeat:reply] (${owner.channel}:${owner.recipient}): ${text}`);
+        }
+      };
+
+      const result = await runAgent(
+        `heartbeat:${owner.recipient}`,
+        prompt,
+        undefined,
+        replyFn,
+        { channel: owner.channel, sender: owner.recipient }
+      );
       console.log(`[heartbeat] Agent: ${result.text.slice(0, 200)}`);
     } catch (err) {
       console.error(`[heartbeat] Error: ${err}`);
@@ -163,6 +195,7 @@ async function main() {
   const shutdown = async () => {
     console.log("\nShutting down...");
     daemonServer.stop();
+    webServer?.stop();
     stopHeartbeat();
     stopScheduler();
     for (const adapter of activeAdapters) {
