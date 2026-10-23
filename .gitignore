@@ -53,4 +53,7 @@ skills/*
 # downloaded media from channels
 media/
 
+# compiled binaries
+main
+
 .docs
