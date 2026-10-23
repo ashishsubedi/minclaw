@@ -12,7 +12,8 @@
     "dev": "bun --watch run src/index.ts",
     "web": "bun run src/web/server.ts",
     "cli": "bun run src/cli.ts",
-    "tui": "bun run src/tui/viewer.ts"
+    "tui": "bun run src/tui/viewer.ts",
+    "lint": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",

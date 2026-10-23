@@ -82,6 +82,11 @@ switch (subcommand || "chat") {
     break;
   }
 
+  case "voice": {
+    await import("./cli/voice-ctl.ts");
+    break;
+  }
+
   case "help":
   case "--help":
   case "-h": {
@@ -100,6 +105,7 @@ Commands:
   logs          Show daemon logs (use -f/--follow, --lines=N)
   sessions      Interactive session browser (TUI)
   skills        List, sync, or install skills
+  voice [sub]   Voice companion for Mac (start, stop, status, build)
   help          Show this help
 `);
     break;

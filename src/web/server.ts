@@ -389,7 +389,7 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   return text("Not found", 404);
 }
 
-export function startWebServer(startPort = PORT): Bun.Server<WebSocket> {
+export function startWebServer(startPort = PORT): Bun.Server<any> {
   let lastError: unknown;
 
   for (let candidate = startPort; candidate < startPort + 20; candidate += 1) {

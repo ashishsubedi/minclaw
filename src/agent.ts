@@ -301,15 +301,17 @@ async function callModelWithFallback(
       try {
         const lastMsg = context.messages[context.messages.length - 1];
         let promptText = "";
-        if (typeof lastMsg.content === "string") {
-          promptText = lastMsg.content;
-        } else if (Array.isArray(lastMsg.content)) {
-          promptText = lastMsg.content
-            .filter((p) => p.type === "text")
-            .map((p: any) => p.text)
-            .join("\n");
-        } else {
-          promptText = String(lastMsg.content);
+        if (lastMsg) {
+          if (typeof lastMsg.content === "string") {
+            promptText = lastMsg.content;
+          } else if (Array.isArray(lastMsg.content)) {
+            promptText = (lastMsg.content as any[])
+              .filter((p) => p.type === "text")
+              .map((p: any) => p.text)
+              .join("\n");
+          } else {
+            promptText = String(lastMsg.content);
+          }
         }
 
         const conversationId = sessionKey ? agySessions.get(sessionKey) : undefined;
@@ -473,7 +475,7 @@ export async function completeFast(
     resolvedModels,
     {
       systemPrompt,
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
       tools: [],
     },
     { temperature: 0.1, maxTokens: 1024 }
