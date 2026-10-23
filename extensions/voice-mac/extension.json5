@@ -13,6 +13,7 @@
   stt: {
     engine: 'mlx_whisper',
     model: 'mlx-community/whisper-tiny',
+    language: 'en',
     path: '~/.venv-vllm-metal/bin/mlx_whisper',
   },
   tts: {

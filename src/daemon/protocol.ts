@@ -8,6 +8,7 @@
 export type ClientMessage =
   | { type: "chat"; sessionId: string; text: string }
   | { type: "command"; sessionId: string; command: string; args: string }
+  | { type: "tool_call"; tool: string; args: Record<string, any>; sessionKey?: string }
   | { type: "status" }
   | { type: "ping" };
 
@@ -34,6 +35,8 @@ export type ServerMessage =
       jobs: number;
     }
   | { type: "command_response"; text: string }
+  | { type: "tool_response"; tool: string; output: string; isError: boolean }
+  | { type: "session_cleared"; sessionId: string }
   | { type: "error"; message: string }
   | { type: "pong" };
 

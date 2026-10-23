@@ -13,7 +13,7 @@ import {
   stopScheduler,
 } from "./scheduler/scheduler.ts";
 import { startHeartbeat, stopHeartbeat } from "./scheduler/heartbeat.ts";
-import { runAgent } from "./agent.ts";
+import { runAgent, killActiveAgyProcesses } from "./agent.ts";
 import { startDaemonServer, setActiveChannels, sendToTerminalSession } from "./daemon/server.ts";
 import { getChannelSender } from "./channels/registry.ts";
 import { getStateDir, ensureStateDir } from "./auth/credentials.ts";
@@ -194,6 +194,7 @@ async function main() {
   // --- Graceful shutdown ---
   const shutdown = async () => {
     console.log("\nShutting down...");
+    killActiveAgyProcesses();
     daemonServer.stop();
     webServer?.stop();
     stopHeartbeat();

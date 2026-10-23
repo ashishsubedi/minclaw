@@ -141,3 +141,99 @@ export async function sendGoogleEmail(
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+function decodeBase64url(data: string): string {
+  let b64 = data.replace(/-/g, "+").replace(/_/g, "/");
+  while (b64.length % 4 !== 0) {
+    b64 += "=";
+  }
+  return Buffer.from(b64, "base64").toString("utf-8");
+}
+
+function extractBodyText(payload?: any): string {
+  if (!payload) return "";
+
+  function findText(part: any): string {
+    if (!part) return "";
+
+    if (part.mimeType === "text/plain" && part.body?.data) {
+      return decodeBase64url(part.body.data);
+    }
+
+    if (Array.isArray(part.parts)) {
+      for (const p of part.parts) {
+        if (p.mimeType === "text/plain" && p.body?.data) {
+          return decodeBase64url(p.body.data);
+        }
+      }
+      for (const p of part.parts) {
+        const text = findText(p);
+        if (text) return text;
+      }
+      for (const p of part.parts) {
+        if (p.mimeType === "text/html" && p.body?.data) {
+          const html = decodeBase64url(p.body.data);
+          return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        }
+      }
+    }
+
+    if (part.mimeType === "text/html" && part.body?.data) {
+      const html = decodeBase64url(part.body.data);
+      return html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    }
+
+    if (part.body?.data) {
+      return decodeBase64url(part.body.data);
+    }
+
+    return "";
+  }
+
+  return findText(payload);
+}
+
+/**
+ * Read the full content of an email message by ID via Gmail REST API
+ */
+export async function readGoogleMessage(
+  account: EmailAccount,
+  messageId: string
+): Promise<string> {
+  const token = await refreshGoogleAccessToken(account);
+
+  const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`;
+  const msgRes = await fetch(msgUrl, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!msgRes.ok) {
+    const errText = await msgRes.text();
+    throw new Error(`Gmail API read error (${msgRes.status}): ${errText}`);
+  }
+
+  const detail = (await msgRes.json()) as {
+    id: string;
+    snippet?: string;
+    payload?: {
+      headers?: Array<{ name: string; value: string }>;
+      mimeType?: string;
+      body?: { data?: string };
+      parts?: any[];
+    };
+  };
+
+  const headers = detail.payload?.headers || [];
+  const getHeader = (name: string) =>
+    headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || "";
+
+  const from = getHeader("From") || "Unknown Sender";
+  const to = getHeader("To") || account.email;
+  const subject = getHeader("Subject") || "(no subject)";
+  const date = getHeader("Date") || new Date().toISOString();
+
+  const bodyText =
+    extractBodyText(detail.payload) || detail.snippet || "(No message body content)";
+
+  return `Date: ${date}\nFrom: ${from}\nTo: ${to}\nSubject: ${subject}\nAccount: ${account.email} (google)\n\n${bodyText.slice(0, 8000)}`;
+}

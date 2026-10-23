@@ -1,11 +1,11 @@
 {
   model: {
-    provider: 'google',
-    name: 'gemini-3.5-flash-lite',
+    provider: 'agy',
+    name: 'flash:medium',
     fallbacks: [
+      { provider: 'google', name: 'gemini-3.5-flash-lite' },
       { provider: 'google', name: 'gemini-3.5-flash' },
       { provider: 'google', name: 'gemini-3.8-flash' },
-      { provider: 'agy', name: 'gemini-3.8-flash-low' },
     ],
   },
   owner: {

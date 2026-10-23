@@ -30,10 +30,10 @@ test("resolves Google Gemini API key from MPA_GEMINI_KEY and MPA_GEMINI_KEY_FREE
   }
 });
 
-test("config loads gemini-3.5-flash-lite as primary model", () => {
+test("config loads agy with flash:medium as primary default model", () => {
   const config = loadConfig();
-  expect(config.model.provider).toBe("google");
-  expect(config.model.name).toBe("gemini-3.5-flash-lite");
+  expect(config.model.provider).toBe("agy");
+  expect(config.model.name).toBe("flash:medium");
   expect(config.owner?.channel).toBe("telegram");
   expect(config.owner?.recipient).toBe(process.env.TELEGRAM_OWNER_ID || "");
 });

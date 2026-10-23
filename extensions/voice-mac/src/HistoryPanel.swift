@@ -44,6 +44,14 @@ public struct HistoryPanelView: View {
                         .transition(.scale.combined(with: .opacity))
                 }
 
+                // Interactive Reset Session Button
+                if !viewModel.turns.isEmpty {
+                    ResetSessionButton {
+                        viewModel.onResetSession?()
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                }
+
                 // Interactive Close Button
                 CloseHUDButton {
                     viewModel.dismiss(force: true)
@@ -231,6 +239,38 @@ struct StatusActivityBadge: View {
             iconName = "gearshape.2.fill"
         }
         return Image(systemName: iconName)
+    }
+}
+
+// Reset Button with sleek frosted pill design and hover animation
+struct ResetSessionButton: View {
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 9, weight: .bold))
+                Text("New")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+            }
+            .foregroundColor(isHovered ? .white : .white.opacity(0.75))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3.5)
+            .background(
+                Capsule()
+                    .fill(isHovered ? Color.white.opacity(0.2) : Color.white.opacity(0.1))
+                    .overlay(
+                        Capsule()
+                            .stroke(isHovered ? Color.white.opacity(0.35) : Color.white.opacity(0.15), lineWidth: 1)
+                    )
+            )
+            .scaleEffect(isHovered ? 1.05 : 1.0)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isHovered)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .onHover { isHovered = $0 }
     }
 }
 

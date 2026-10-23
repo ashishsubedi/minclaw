@@ -10,6 +10,7 @@ import {
   type ServerMessage,
 } from "./protocol.ts";
 import { handleMessage } from "../router.ts";
+import { executeTool } from "../tools.ts";
 import { listSessions } from "../memory/store.ts";
 import { listJobs } from "../scheduler/scheduler.ts";
 import type { IncomingMessage, ReplyFn } from "../channels/types.ts";
@@ -22,6 +23,34 @@ let activeChannelNames: string[] = [];
 
 export function setActiveChannels(names: string[]): void {
   activeChannelNames = names;
+}
+
+export function notifySessionCleared(sessionId: string): void {
+  const stripped = sessionId.startsWith("terminal:")
+    ? sessionId.slice("terminal:".length)
+    : sessionId;
+
+  for (const [socket, sid] of clients.entries()) {
+    const sidStripped = sid.startsWith("terminal:")
+      ? sid.slice("terminal:".length)
+      : sid;
+
+    const matches =
+      sid === sessionId ||
+      sid === stripped ||
+      sidStripped === sessionId ||
+      sidStripped === stripped ||
+      sidStripped.replace(/_/g, ":") === stripped.replace(/_/g, ":");
+
+    if (matches) {
+      socket.write(
+        encode({
+          type: "session_cleared",
+          sessionId,
+        })
+      );
+    }
+  }
 }
 
 export function sendToTerminalSession(sessionId: string, text: string): boolean {
@@ -203,6 +232,46 @@ async function handleClientMessage(
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         socket.write(encode({ type: "error", message: errMsg }));
+      }
+      break;
+    }
+
+    case "tool_call": {
+      const sessionKey = msg.sessionKey || "terminal:voice_macbook";
+      clients.set(socket, sessionKey);
+      const colonIdx = sessionKey.indexOf(":");
+      const toolContext =
+        colonIdx > 0
+          ? {
+              channel: sessionKey.slice(0, colonIdx),
+              sender: sessionKey.slice(colonIdx + 1),
+            }
+          : undefined;
+
+      try {
+        const res = await executeTool(msg.tool, msg.args || {}, toolContext);
+        if (msg.tool === "session_reset") {
+          notifySessionCleared("voice:macbook");
+          notifySessionCleared(sessionKey);
+        }
+        socket.write(
+          encode({
+            type: "tool_response",
+            tool: msg.tool,
+            output: res.content.map((c) => c.text).join("\n"),
+            isError: res.isError,
+          })
+        );
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        socket.write(
+          encode({
+            type: "tool_response",
+            tool: msg.tool,
+            output: errMsg,
+            isError: true,
+          })
+        );
       }
       break;
     }

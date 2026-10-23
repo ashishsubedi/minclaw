@@ -5,6 +5,18 @@ import * as piAi from "@mariozechner/pi-ai";
 import * as credentials from "../src/auth/credentials.ts";
 
 const originalGetApiKey = credentials.getApiKeyForProvider;
+const originalSpawn = Bun.spawn;
+
+(Bun as any).spawn = (args: string[], options?: any) => {
+  if (args[0] === "agy") {
+    return {
+      stdout: new Response("").body,
+      stderr: new Response("mocked agy primary failure").body,
+      exited: Promise.resolve(1),
+    };
+  }
+  return originalSpawn(args as any, options);
+};
 
 mock.module("../src/auth/credentials.ts", () => ({
   ...credentials,
@@ -40,5 +52,6 @@ mock.module("@mariozechner/pi-ai", () => ({
 test("runAgent falls back to second model if primary fails", async () => {
   const response = await runAgent("test-session", "hello");
   expect(response.text).toBe("Fallback success");
+  Bun.spawn = originalSpawn;
   mock.restore();
 });

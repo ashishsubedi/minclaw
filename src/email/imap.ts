@@ -24,55 +24,45 @@ export function syncHimalayaConfig(): void {
     const accounts = getEmailAccounts().filter((a) => a.type === "imap" && a.imap);
     if (accounts.length === 0) return;
 
-    let existingContent = "";
+    let content = "";
     if (existsSync(HIMALAYA_CONFIG)) {
-      existingContent = readFileSync(HIMALAYA_CONFIG, "utf-8");
+      content = readFileSync(HIMALAYA_CONFIG, "utf-8");
     }
-
-    // Build TOML blocks for each IMAP account
-    const lines: string[] = [existingContent.trim()];
 
     for (const acc of accounts) {
       const imap = acc.imap!;
       const key = sanitizeAccountKey(acc.id);
       const sectionHeader = `[accounts.${key}]`;
 
-      // If section is already in config, skip rewriting it
-      if (existingContent.includes(sectionHeader)) {
-        continue;
-      }
+      // Remove any existing section for this account (old v1 or duplicate)
+      const regex = new RegExp(`(^|\\n)\\[accounts\\.${key}\\][\\s\\S]*?(?=\\n\\[accounts\\.|\$)`, "g");
+      content = content.replace(regex, "").trim();
 
+      const port = imap.port || 993;
+      const scheme = imap.tls !== false ? "imaps" : "imap";
       const block = [
-        "",
         sectionHeader,
         `email = "${acc.email}"`,
         `display-name = "${acc.displayName || acc.email}"`,
-        `backend.type = "imap"`,
-        `backend.host = "${imap.host}"`,
-        `backend.port = ${imap.port || 993}`,
-        `backend.encryption.type = "${imap.tls !== false ? "tls" : "none"}"`,
-        `backend.login = "${imap.user || acc.email}"`,
-        `backend.auth.type = "password"`,
-        `backend.auth.password = "${imap.pass}"`,
+        `imap.server = "${scheme}://${imap.host}:${port}"`,
+        `imap.sasl.plain.authcid = "${imap.user || acc.email}"`,
+        `imap.sasl.plain.passwd.raw = "${imap.pass}"`,
       ];
 
       if (imap.smtpHost) {
+        const smtpPort = imap.smtpPort || 465;
+        const smtpScheme = imap.smtpTls !== false ? "smtps" : "smtp";
         block.push(
-          `message.send.backend.type = "smtp"`,
-          `message.send.backend.host = "${imap.smtpHost}"`,
-          `message.send.backend.port = ${imap.smtpPort || 465}`,
-          `message.send.backend.encryption.type = "${imap.smtpTls !== false ? "tls" : "start-tls"}"`,
-          `message.send.backend.login = "${imap.smtpUser || imap.user || acc.email}"`,
-          `message.send.backend.auth.type = "password"`,
-          `message.send.backend.auth.password = "${imap.smtpPass || imap.pass}"`
+          `smtp.server = "${smtpScheme}://${imap.smtpHost}:${smtpPort}"`,
+          `smtp.sasl.plain.authcid = "${imap.smtpUser || imap.user || acc.email}"`,
+          `smtp.sasl.plain.passwd.raw = "${imap.smtpPass || imap.pass}"`
         );
       }
 
-      lines.push(block.join("\n"));
+      content += "\n\n" + block.join("\n");
     }
 
-    const newContent = lines.filter(Boolean).join("\n\n") + "\n";
-    writeFileSync(HIMALAYA_CONFIG, newContent, "utf-8");
+    writeFileSync(HIMALAYA_CONFIG, content.trim() + "\n", "utf-8");
   } catch (err) {
     console.warn(`[email] Himalaya config sync warning: ${err}`);
   }
@@ -90,29 +80,44 @@ export async function listImapUnreadMessages(
 
   try {
     const proc = Bun.spawn(
-      ["himalaya", "--account", key, "envelope", "list", "-s", String(maxResults), "--output", "json"],
+      ["himalaya", "-a", key, "envelope", "list", "-s", String(maxResults), "--json"],
       { stdout: "pipe", stderr: "pipe" }
     );
     const stdout = await new Response(proc.stdout).text();
     await proc.exited;
 
     if (!stdout.trim()) return summaries;
-    const envelopes = JSON.parse(stdout);
-    if (!Array.isArray(envelopes)) return summaries;
+    const parsed = JSON.parse(stdout);
+    const rawEnvelopes = Array.isArray(parsed) ? parsed : parsed.envelopes;
+    if (!Array.isArray(rawEnvelopes)) return summaries;
 
-    for (const env of envelopes) {
-      const flags = env.flags || [];
-      const isUnread = !flags.includes("seen") && !flags.includes("Seen");
+    for (const env of rawEnvelopes) {
+      const rawFlags = Array.isArray(env.flags) ? env.flags : [];
+      const hasSeen = rawFlags.some((f: any) => {
+        if (typeof f === "string") return f.toLowerCase() === "seen";
+        const val = f?.iana || f?.raw || "";
+        return String(val).toLowerCase().includes("seen");
+      });
+
+      let fromStr = "Unknown";
+      if (Array.isArray(env.from) && env.from.length > 0) {
+        const primary = env.from[0];
+        fromStr = primary.name ? `"${primary.name}" <${primary.email || primary.addr}>` : primary.email || primary.addr || "Unknown";
+      } else if (env.from && typeof env.from === "object") {
+        fromStr = env.from.name ? `"${env.from.name}" <${env.from.email || env.from.addr}>` : env.from.email || env.from.addr || "Unknown";
+      } else if (typeof env.from === "string") {
+        fromStr = env.from;
+      }
 
       summaries.push({
         id: String(env.id || env.internal_id || Math.random()),
         accountId: account.id,
         accountEmail: account.email,
         accountType: "imap",
-        from: env.from?.name ? `"${env.from.name}" <${env.from.addr}>` : env.from?.addr || "Unknown",
+        from: fromStr,
         subject: env.subject || "(no subject)",
         date: env.date || new Date().toISOString(),
-        unread: isUnread,
+        unread: !hasSeen,
       });
     }
   } catch (err) {
@@ -120,4 +125,30 @@ export async function listImapUnreadMessages(
   }
 
   return summaries;
+}
+
+/**
+ * Read the full content of an email message by ID via Himalaya CLI
+ */
+export async function readImapMessage(
+  account: EmailAccount,
+  messageId: string
+): Promise<string> {
+  const key = sanitizeAccountKey(account.id);
+  const proc = Bun.spawn(
+    ["himalaya", "-a", key, "message", "read", String(messageId)],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+
+  const stdout = await new Response(proc.stdout).text();
+  const stderr = await new Response(proc.stderr).text();
+  const exitCode = await proc.exited;
+
+  if (exitCode !== 0) {
+    throw new Error(
+      `Himalaya message read failed (${exitCode}): ${stderr.trim() || stdout.trim() || "unknown error"}`
+    );
+  }
+
+  return stdout.trim();
 }

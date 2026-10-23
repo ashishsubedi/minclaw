@@ -4,13 +4,21 @@ import { saveProviderCredential } from "./auth/credentials.ts";
 import { loadConfig } from "./config.ts";
 import { searchMemory, getChatHistory, listSessions } from "./memory/store.ts";
 import { compactSession } from "./memory/compaction.ts";
-import { sessionKeyFromMessage } from "./session.ts";
+import { sessionKeyFromMessage, clearSession } from "./session.ts";
 import { resolve, dirname } from "path";
 import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "fs";
 import { getChannelSender, detectMediaType, getRegisteredChannels } from "./channels/registry.ts";
 import { addJob, parseTimeToJob } from "./scheduler/scheduler.ts";
-import { listAllUnreadEmails, sendEmail } from "./email/service.ts";
+import { listAllUnreadEmails, sendEmail, readEmailMessage } from "./email/service.ts";
 import { listAllUpcomingEvents, getLastCalendarError } from "./email/calendar.ts";
+import {
+  registerToolExtension,
+  getToolExtension,
+  getAllRegisteredTools,
+  getAllToolExtensions,
+  type ToolExtension,
+  type ToolResult,
+} from "./extensions/tools-registry.ts";
 
 export type ToolContext = {
   channel: string;
@@ -202,8 +210,13 @@ export const webFetchTool: Tool<typeof WebFetchParams> = {
 
 const EmailParams = Type.Object({
   action: Type.String({
-    description: "Action to perform: 'list_unread' to view unread messages, or 'send' to send an email",
+    description:
+      "Action to perform: 'list_unread' to view unread messages, 'read' to read a full email by ID, or 'send' to send an email",
   }),
+  id: Type.Optional(Type.String({ description: "Email message ID to read (required for action='read')" })),
+  account: Type.Optional(
+    Type.String({ description: "Optional account filter (e.g. 'uni-saarland', 'gmail', or email address)" })
+  ),
   to: Type.Optional(Type.String({ description: "Recipient email address (required for send action)" })),
   subject: Type.Optional(Type.String({ description: "Email subject (required for send action)" })),
   body: Type.Optional(Type.String({ description: "Email body text (required for send action)" })),
@@ -214,8 +227,9 @@ const EmailParams = Type.Object({
 export const emailTool: Tool<typeof EmailParams> = {
   name: "email",
   description:
-    "Check unread emails or send an email across connected Google Workspace and University IMAP accounts. " +
-    "Use action='list_unread' to view incoming unread messages with subjects, senders, and snippets. " +
+    "Check unread emails, read full email content by ID, or send an email across connected Google Workspace and University IMAP accounts. " +
+    "Use action='list_unread' to view incoming unread messages with IDs, subjects, senders, and snippets. " +
+    "Use action='read' with id and optional account to read full message content. " +
     "Use action='send' with to, subject, and body to draft and send an email.",
   parameters: EmailParams,
 };
@@ -258,6 +272,47 @@ export const compactSessionTool: Tool<typeof CompactSessionParams> = {
   parameters: CompactSessionParams,
 };
 
+const YoutubeParams = Type.Object({
+  action: Type.Optional(
+    Type.Union([Type.Literal("play"), Type.Literal("search")], {
+      description: "Action: 'play' to search and open video in browser (Firefox by default), or 'search' to list matching YouTube videos",
+      default: "play",
+    })
+  ),
+  query: Type.String({ description: "YouTube search query or video URL" }),
+  browser: Type.Optional(
+    Type.String({ description: "Browser application to open the video in (default: 'Firefox')" })
+  ),
+  limit: Type.Optional(
+    Type.Number({ description: "Number of search results (default 5)", minimum: 1, maximum: 10 })
+  ),
+});
+
+export const youtubeTool: Tool<typeof YoutubeParams> = {
+  name: "youtube",
+  description:
+    "Search YouTube and open videos in browser (Firefox by default) or list matching videos. " +
+    "Uses fast metadata extraction (--flat-playlist) for sub-second search results.",
+  parameters: YoutubeParams,
+};
+
+const SessionResetParams = Type.Object({
+  sessionKey: Type.Optional(
+    Type.String({
+      description:
+        "Session key to reset (e.g. 'terminal:voice_macbook' or 'telegram:123456789'). Defaults to current session.",
+    })
+  ),
+});
+
+export const sessionResetTool: Tool<typeof SessionResetParams> = {
+  name: "session_reset",
+  description:
+    "Reset conversation session history for the current or specified session key. " +
+    "Clears persistent transcripts and in-memory agent session state.",
+  parameters: SessionResetParams,
+};
+
 export const allTools: Tool[] = [
   shellTool,
   readFileTool,
@@ -272,11 +327,13 @@ export const allTools: Tool[] = [
   emailTool,
   calendarTool,
   compactSessionTool,
+  youtubeTool,
+  sessionResetTool,
 ];
 
 // ── Tool execution ────────────────────────────────────────────────
 
-type ToolResult = { content: TextContent[]; isError: boolean };
+export type { ToolResult };
 
 const MAX_OUTPUT = 50_000;
 
@@ -982,17 +1039,33 @@ async function executeWebSearch(
 async function executeEmail(args: Static<typeof EmailParams>): Promise<ToolResult> {
   try {
     if (args.action === "list_unread") {
-      const messages = await listAllUnreadEmails(args.limit || 5);
+      const fetchLimit = args.limit || 5;
+      const filter = args.account || args.from;
+      let messages = await listAllUnreadEmails(fetchLimit, filter);
       if (messages.length === 0) {
-        return { content: text("No unread emails found across connected accounts."), isError: false };
+        const scopeMsg = filter ? ` matching '${filter}'` : "";
+        return { content: text(`No unread emails found${scopeMsg} across connected accounts.`), isError: false };
       }
       const formatted = messages
         .map(
           (m, idx) =>
-            `[${idx + 1}] From: ${m.from}\n    Account: ${m.accountEmail} (${m.accountType})\n    Subject: ${m.subject}\n    Date: ${m.date}\n    Snippet: ${m.snippet || ""}`
+            `[${idx + 1}] ID: ${m.id} | Account: ${m.accountEmail} (${m.accountType})\n    From: ${m.from}\n    Subject: ${m.subject}\n    Date: ${m.date}${m.snippet ? `\n    Snippet: ${m.snippet}` : ""}`
         )
         .join("\n\n");
       return { content: text(`Found ${messages.length} unread email(s):\n\n${formatted}`), isError: false };
+    }
+
+    if (args.action === "read") {
+      if (!args.id) {
+        return {
+          content: text("Error: 'id' parameter is required for action='read' (e.g. action=read id=\"1043\")."),
+          isError: true,
+        };
+      }
+      const messageId = String(args.id).trim();
+      const filter = args.account || args.from;
+      const body = await readEmailMessage(messageId, filter);
+      return { content: text(body), isError: false };
     }
 
     if (args.action === "send") {
@@ -1012,7 +1085,12 @@ async function executeEmail(args: Static<typeof EmailParams>): Promise<ToolResul
       return { content: text(`Failed to send email: ${res.error}`), isError: true };
     }
 
-    return { content: text(`Invalid action: ${args.action}`), isError: true };
+    return {
+      content: text(
+        `Invalid email action: '${args.action || "undefined"}'. Valid actions are: 'list_unread' (optional: limit, account), 'read' (required: id, optional: account), or 'send' (required: to, subject, body).`
+      ),
+      isError: true,
+    };
   } catch (err: any) {
     return {
       content: text(`Email tool error: ${err.message || String(err)}`),
@@ -1087,11 +1165,338 @@ async function executeCompactSession(
   }
 }
 
+export type YoutubeRunner = {
+  runYtDlp?: (args: string[]) => Promise<{ stdout: string; stderr: string; exitCode: number }>;
+  openBrowser?: (url: string, browser?: string) => Promise<{ exitCode: number }>;
+};
+
+function isYoutubeUrl(str: string): boolean {
+  return /^(https?:\/\/)?((www|m)\.)?(youtube\.com\/(watch\?.*v=|embed\/|v\/|shorts\/)|youtu\.be\/)[\w-]+/i.test(
+    str.trim()
+  );
+}
+
+function formatDuration(seconds?: number): string {
+  if (typeof seconds !== "number" || isNaN(seconds) || seconds <= 0) return "";
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
+}
+
+export async function executeYoutube(
+  args: Static<typeof YoutubeParams>,
+  context?: ToolContext,
+  runner?: YoutubeRunner
+): Promise<ToolResult> {
+  const action = args.action || "play";
+  const browser = args.browser || "Firefox";
+  const query = (args.query || "").trim();
+  const limit = Math.min(Math.max(args.limit || 5, 1), 10);
+
+  if (!query) {
+    return { content: text("Error: query parameter is required for youtube tool."), isError: true };
+  }
+
+  try {
+    // If query is already a direct YouTube URL and action !== "search", open directly
+    if (isYoutubeUrl(query) && action !== "search") {
+      let openExitCode = 0;
+      if (runner?.openBrowser) {
+        const res = await runner.openBrowser(query, browser);
+        openExitCode = res.exitCode;
+      } else {
+        try {
+          const proc1 = Bun.spawn(["open", "-a", browser, query]);
+          await proc1.exited;
+          if (proc1.exitCode !== 0) {
+            const proc2 = Bun.spawn(["open", query]);
+            await proc2.exited;
+            openExitCode = proc2.exitCode ?? 1;
+          }
+        } catch {
+          const procFallback = Bun.spawn(["open", query]);
+          await procFallback.exited;
+          openExitCode = procFallback.exitCode ?? 1;
+        }
+      }
+
+      if (openExitCode !== 0) {
+        return {
+          content: text(`Failed to open URL in browser (exit code ${openExitCode}).`),
+          isError: true,
+        };
+      }
+      return {
+        content: text(`Opened ${query} in ${browser}.`),
+        isError: false,
+      };
+    }
+
+    // Run yt-dlp search with --flat-playlist for fast sub-second metadata fetching
+    const ytArgs = ["--flat-playlist", "--dump-single-json", `ytsearch${limit}:${query}`];
+    let ytRes: { stdout: string; stderr: string; exitCode: number };
+
+    if (runner?.runYtDlp) {
+      ytRes = await runner.runYtDlp(ytArgs);
+    } else {
+      const proc = Bun.spawn(["yt-dlp", ...ytArgs], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const timeoutPromise = new Promise<{ stdout: string; stderr: string; exitCode: number }>((_, reject) =>
+        setTimeout(() => {
+          try {
+            proc.kill();
+          } catch {}
+          reject(new Error("yt-dlp search timed out after 10 seconds"));
+        }, 10_000)
+      );
+
+      const runPromise = (async () => {
+        const stdout = await new Response(proc.stdout).text();
+        const stderr = await new Response(proc.stderr).text();
+        const exitCode = await proc.exited;
+        return { stdout, stderr, exitCode };
+      })();
+
+      ytRes = await Promise.race([runPromise, timeoutPromise]);
+    }
+
+    if (ytRes.exitCode !== 0) {
+      return {
+        content: text(`YouTube search failed: ${ytRes.stderr.trim() || `yt-dlp exited with ${ytRes.exitCode}`}`),
+        isError: true,
+      };
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(ytRes.stdout);
+    } catch (err: any) {
+      return {
+        content: text(`Failed to parse yt-dlp output as JSON: ${err.message}`),
+        isError: true,
+      };
+    }
+
+    const rawEntries = Array.isArray(parsed?.entries)
+      ? parsed.entries
+      : parsed?.id
+        ? [parsed]
+        : [];
+
+    const entries = rawEntries
+      .map((e: any) => ({
+        id: e.id,
+        title: e.title || "Untitled",
+        url: e.url && e.url.startsWith("http") ? e.url : (e.id ? `https://www.youtube.com/watch?v=${e.id}` : ""),
+        channel: e.channel || e.uploader || "Unknown",
+        duration: e.duration,
+      }))
+      .filter((e: any) => e.url || e.id);
+
+    if (entries.length === 0) {
+      return {
+        content: text(`No YouTube results found for "${query}".`),
+        isError: false,
+      };
+    }
+
+    if (action === "search") {
+      const formatted = entries
+        .map((e: any, idx: number) => {
+          const dur = formatDuration(e.duration);
+          const parts = [`[${idx + 1}] ${e.title}`, `    URL: ${e.url}`, `    Channel: ${e.channel}`];
+          if (dur) parts.push(`    Duration: ${dur}`);
+          return parts.join("\n");
+        })
+        .join("\n\n");
+      return {
+        content: text(`YouTube Search Results for "${query}":\n\n${formatted}`),
+        isError: false,
+      };
+    }
+
+    // Default action === "play"
+    const first = entries[0];
+    const videoUrl = first.url || `https://www.youtube.com/watch?v=${first.id}`;
+
+    let openExitCode = 0;
+    if (runner?.openBrowser) {
+      const res = await runner.openBrowser(videoUrl, browser);
+      openExitCode = res.exitCode;
+    } else {
+      try {
+        const proc1 = Bun.spawn(["open", "-a", browser, videoUrl]);
+        await proc1.exited;
+        if (proc1.exitCode !== 0) {
+          const proc2 = Bun.spawn(["open", videoUrl]);
+          await proc2.exited;
+          openExitCode = proc2.exitCode ?? 1;
+        }
+      } catch {
+        const procFallback = Bun.spawn(["open", videoUrl]);
+        await procFallback.exited;
+        openExitCode = procFallback.exitCode ?? 1;
+      }
+    }
+
+    if (openExitCode !== 0) {
+      return {
+        content: text(`Failed to open browser for "${first.title}" (${videoUrl}).`),
+        isError: true,
+      };
+    }
+
+    return {
+      content: text(`Opened "${first.title}" (${videoUrl}) in ${browser}.`),
+      isError: false,
+    };
+  } catch (err: any) {
+    return {
+      content: text(`YouTube tool error: ${err.message || String(err)}`),
+      isError: true,
+    };
+  }
+}
+
+export async function executeSessionReset(
+  args: Static<typeof SessionResetParams>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  try {
+    const targetKey =
+      args.sessionKey ||
+      (context?.channel && context?.sender
+        ? sessionKeyFromMessage(context.channel, context.sender)
+        : "terminal:voice_macbook");
+
+    clearSession(targetKey);
+
+    try {
+      const { clearAgySession } = await import("./agent.ts");
+      if (typeof clearAgySession === "function") {
+        clearAgySession(targetKey);
+      }
+    } catch {
+      // Ignore in tests or if agent module is not active
+    }
+
+    return {
+      content: text(`Session ${targetKey} cleared.`),
+      isError: false,
+    };
+  } catch (err: any) {
+    return {
+      content: text(`session_reset error: ${err.message || String(err)}`),
+      isError: true,
+    };
+  }
+}
+
+// ── Built-in tool extension registrations ─────────────────────────
+
+registerToolExtension({
+  tool: shellTool,
+  execute: (args, ctx) => executeShell(args, ctx),
+  cliUsage: 'minclaw tool call shell command="ls -la"',
+});
+
+registerToolExtension({
+  tool: readFileTool,
+  execute: (args) => executeReadFile(args),
+  cliUsage: 'minclaw tool call read_file path="package.json"',
+});
+
+registerToolExtension({
+  tool: saveCredentialTool,
+  execute: (args) => executeSaveCredential(args),
+  cliUsage: 'minclaw tool call save_credential provider="whisper" apiKey="..."',
+});
+
+registerToolExtension({
+  tool: searchMemoryTool,
+  execute: (args) => executeSearchMemory(args),
+  cliUsage: 'minclaw tool call search_memory query="deployment"',
+});
+
+registerToolExtension({
+  tool: rememberTool,
+  execute: (args) => executeRemember(args),
+  cliUsage: 'minclaw tool call remember note="User prefers dark mode"',
+});
+
+registerToolExtension({
+  tool: scheduleReminderTool,
+  execute: (args, ctx) => executeScheduleReminder(args, ctx),
+  cliUsage: 'minclaw tool call schedule_reminder when="in 10 minutes" message="Take a break"',
+});
+
+registerToolExtension({
+  tool: sendMessageTool,
+  execute: (args, ctx) => executeSendMessage(args, ctx),
+  cliUsage: 'minclaw tool call send_message text="Hello from MinClaw"',
+});
+
+registerToolExtension({
+  tool: sendFileTool,
+  execute: (args, ctx) => executeSendFile(args, ctx),
+  cliUsage: 'minclaw tool call send_file filePath="/path/to/file.png"',
+});
+
+registerToolExtension({
+  tool: webSearchTool,
+  execute: (args, ctx) => executeWebSearch(args, ctx),
+  cliUsage: 'minclaw tool call web_search query="TypeScript 5.8 features"',
+});
+
+registerToolExtension({
+  tool: webFetchTool,
+  execute: (args, ctx) => executeWebFetch(args, ctx),
+  cliUsage: 'minclaw tool call web_fetch url="https://example.com"',
+});
+
+registerToolExtension({
+  tool: emailTool,
+  execute: (args) => executeEmail(args),
+  cliUsage: 'minclaw tool call email action=list_unread',
+});
+
+registerToolExtension({
+  tool: calendarTool,
+  execute: (args) => executeCalendar(args),
+  cliUsage: 'minclaw tool call calendar action=list_events',
+});
+
+registerToolExtension({
+  tool: compactSessionTool,
+  execute: (args, ctx) => executeCompactSession(args, ctx),
+  cliUsage: 'minclaw tool call compact_session',
+});
+
+registerToolExtension({
+  tool: youtubeTool,
+  execute: (args, ctx) => executeYoutube(args, ctx),
+  cliUsage: 'minclaw tool call youtube action=play query="Rick Astley" browser="Firefox"',
+});
+
+registerToolExtension({
+  tool: sessionResetTool,
+  execute: (args, ctx) => executeSessionReset(args, ctx),
+  cliUsage: 'minclaw tool call session_reset sessionKey="terminal:voice_macbook"',
+});
+
 export async function executeTool(
   name: string,
   args: Record<string, any>,
   context?: ToolContext
 ): Promise<ToolResult> {
+  const ext = getToolExtension(name);
+  if (ext) {
+    return ext.execute(args, context);
+  }
+
   switch (name) {
     case "shell":
       return executeShell(args as Static<typeof ShellParams>, context);
@@ -1119,6 +1524,10 @@ export async function executeTool(
       return executeCalendar(args as Static<typeof CalendarParams>);
     case "compact_session":
       return executeCompactSession(args as Static<typeof CompactSessionParams>, context);
+    case "youtube":
+      return executeYoutube(args as Static<typeof YoutubeParams>, context);
+    case "session_reset":
+      return executeSessionReset(args as Static<typeof SessionResetParams>, context);
     default:
       return { content: text(`Unknown tool: ${name}`), isError: true };
   }

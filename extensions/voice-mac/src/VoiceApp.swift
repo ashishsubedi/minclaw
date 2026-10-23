@@ -131,6 +131,13 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
         viewModel.dismiss(force: true)
     }
 
+    public func resetVoiceSession() {
+        print("[voice:app] 🔄 Resetting voice session")
+        kokoroClient.stopPlayback()
+        viewModel.clearSessionHistory()
+        _ = daemonClient.sendResetCommand(sessionId: "voice:macbook")
+    }
+
     private func isIntermediateStatusMessage(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
@@ -194,7 +201,8 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
                 let transcription = self.transcriber.transcribe(audioFileURL: self.tempAudioURL)
 
                 DispatchQueue.main.async {
-                    if let prompt = transcription, !prompt.isEmpty {
+                    let hasAlphanumeric = transcription?.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) ?? false
+                    if let prompt = transcription, !prompt.isEmpty, hasAlphanumeric {
                         print("[voice:app] 🗣️ User said: \"\(prompt)\"")
                         self.viewModel.setThinking(prompt: prompt)
 
@@ -254,6 +262,15 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
             self?.viewModel.setIdle()
         }
 
+        // Session reset wiring
+        viewModel.onResetSession = { [weak self] in
+            self?.resetVoiceSession()
+        }
+
+        daemonClient.onSessionCleared = { [weak self] in
+            self?.viewModel.clearSessionHistory()
+        }
+
         // Visibility observer: when UI hides, immediately halt all speech
         viewModel.$isVisible.receive(on: DispatchQueue.main).sink { [weak self] visible in
             guard let self = self else { return }
@@ -265,12 +282,18 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
             }
         }.store(in: &cancellables)
 
-        // Local ESC monitor
+        // Local ESC and Cmd+K monitor
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self else { return event }
-            if event.keyCode == 53 && self.viewModel.isVisible {
-                self.dismissAndStop()
-                return nil
+            if self.viewModel.isVisible {
+                if event.keyCode == 53 {
+                    self.dismissAndStop()
+                    return nil
+                }
+                if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers?.lowercased() == "k" {
+                    self.resetVoiceSession()
+                    return nil
+                }
             }
             return event
         }

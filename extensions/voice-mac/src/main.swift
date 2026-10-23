@@ -1,6 +1,10 @@
 import AppKit
 import Foundation
 
+// Unbuffer stdout and stderr so logs flush immediately when redirected to file
+setbuf(stdout, nil)
+setbuf(stderr, nil)
+
 // Parse command line arguments
 var selectedMode: UIMode = .notch
 var selectedHotkey: HotkeyType = .rightOption

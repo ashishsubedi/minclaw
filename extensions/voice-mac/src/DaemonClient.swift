@@ -15,6 +15,7 @@ public class DaemonClient {
     public var onMessage: ((ChatResponse) -> Void)?
     public var onStatus: ((String) -> Void)?
     public var onError: ((String) -> Void)?
+    public var onSessionCleared: (() -> Void)?
 
     public init(socketPath: String? = nil) {
         if let path = socketPath {
@@ -104,6 +105,33 @@ public class DaemonClient {
         }
     }
 
+    public func sendResetCommand(sessionId: String = "voice:macbook") -> Bool {
+        if !isConnected {
+            if !connect() { return false }
+        }
+
+        let payload: [String: Any] = [
+            "type": "command",
+            "sessionId": sessionId,
+            "command": "/reset",
+            "args": ""
+        ]
+
+        do {
+            var data = try JSONSerialization.data(withJSONObject: payload, options: [])
+            data.append(contentsOf: [0x0A]) // \n
+
+            let bytesWritten = data.withUnsafeBytes { ptr in
+                write(socketFD, ptr.baseAddress, data.count)
+            }
+
+            return bytesWritten == data.count
+        } catch {
+            print("[voice:daemon] JSON encode error: \(error)")
+            return false
+        }
+    }
+
     private func startReading() {
         readQueue.async { [weak self] in
             guard let self = self else { return }
@@ -152,6 +180,17 @@ public class DaemonClient {
                 let text = json["text"] as? String ?? ""
                 DispatchQueue.main.async { [weak self] in
                     self?.onStatus?(text)
+                }
+            } else if type == "session_cleared" {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onSessionCleared?()
+                }
+            } else if type == "command_response" {
+                let text = json["text"] as? String ?? ""
+                if text.contains("Session cleared") {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onSessionCleared?()
+                    }
                 }
             } else if type == "error" {
                 let errMsg = json["message"] as? String ?? "Unknown error"

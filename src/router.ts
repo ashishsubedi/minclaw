@@ -9,6 +9,7 @@ import {
   listSessions,
 } from "./memory/store.ts";
 import { clearSession } from "./session.ts";
+import { notifySessionCleared } from "./daemon/server.ts";
 import { transcribeAudio } from "./media.ts";
 import {
   addJob,
@@ -20,6 +21,31 @@ import { getHeartbeatStatus } from "./scheduler/heartbeat.ts";
 import { syncCatalog } from "./skills/catalog.ts";
 import { installSkillByName } from "./skills/installer.ts";
 import { getAllSkillStatuses } from "./skills/loader.ts";
+
+/**
+ * Detects noise or punctuation-only inputs that contain no letters or numbers.
+ */
+export function isNoiseOnlyInput(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  return !/[\p{L}\p{N}]/u.test(trimmed);
+}
+
+/**
+ * Detects natural-language phrases requesting to reset, clear, or start a new session.
+ */
+export function isNaturalResetRequest(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const r1 =
+    /^(?:okay[,\s.!]*|ok[,\s.!]*|hey[,\s.!]*|please[,\s.!]*)*(?:can you\s+|could you\s+)?(?:please\s+)?(?:clear|reset|wipe|restart)\s+(?:the\s+|my\s+)?(?:previous\s+|current\s+|chat\s+|voice\s+)?(?:session|conversation|history|context)(?:\s+(?:and\s+)?(?:start\s+)?(?:a\s+|the\s+)?new\s+(?:session|conversation|one))?[.,!\s]*$/i;
+
+  const r2 =
+    /^(?:okay[,\s.!]*|ok[,\s.!]*)*(?:clear\s+(?:the\s+)?previous\s+session[,\s]+)?(?:please\s+)?start\s+(?:a\s+|the\s+)?new\s+(?:session|conversation)[.,!\s]*$/i;
+
+  return r1.test(trimmed) || r2.test(trimmed);
+}
 
 /**
  * Message router: incoming message → command check → agent → reply.
@@ -40,6 +66,23 @@ export async function handleMessage(
   if (text.startsWith("/")) {
     const handled = await handleCommand(text, msg, reply, key);
     if (handled) return;
+  }
+
+  // Guard against noise or punctuation-only input (e.g. "." or "...")
+  if ((!msg.attachments || msg.attachments.length === 0) && isNoiseOnlyInput(text)) {
+    console.log(`[router] 🔇 Ignoring noise/punctuation-only input from ${key}: "${text}"`);
+    return;
+  }
+
+  // Check for natural reset request
+  if (isNaturalResetRequest(text)) {
+    clearSession(key);
+    clearAgySession(key);
+    notifySessionCleared(msg.sender);
+    notifySessionCleared(key);
+    console.log(`[router] 🧹 Cleared session ${key} (natural reset trigger)`);
+    await reply("Previous session cleared. Starting fresh—how can I help you?");
+    return;
   }
 
   // Transcribe audio/voice attachments before building text
@@ -197,6 +240,8 @@ async function handleCommand(
     case "/reset": {
       clearSession(sessionKey);
       clearAgySession(sessionKey);
+      notifySessionCleared(msg.sender);
+      notifySessionCleared(sessionKey);
       await reply("Session cleared.");
       return true;
     }

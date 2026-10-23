@@ -87,6 +87,13 @@ switch (subcommand || "chat") {
     break;
   }
 
+  case "tool":
+  case "tools": {
+    const { handleToolCli } = await import("./cli/tool-ctl.ts");
+    await handleToolCli(process.argv.slice(3));
+    break;
+  }
+
   case "help":
   case "--help":
   case "-h": {
@@ -105,6 +112,7 @@ Commands:
   logs          Show daemon logs (use -f/--follow, --lines=N)
   sessions      Interactive session browser (TUI)
   skills        List, sync, or install skills
+  tool [sub]    Tool extensions controller (list, call <name> [k=v...])
   voice [sub]   Voice companion for Mac (start, stop, status, build)
   help          Show this help
 `);

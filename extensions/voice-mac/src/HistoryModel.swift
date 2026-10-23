@@ -31,6 +31,7 @@ public class VoiceViewModel: ObservableObject {
 
     private var autoHideTimer: Timer?
     public let maxTurns: Int = 5
+    public var onResetSession: (() -> Void)?
 
     public init(uiMode: UIMode = .notch) {
         self.uiMode = uiMode
@@ -74,6 +75,20 @@ public class VoiceViewModel: ObservableObject {
         statusMessage = ""
         audioLevel = 0.0
         startAutoHideTimer(after: 15.0)
+    }
+
+    public func clearSessionHistory() {
+        if Thread.isMainThread {
+            self.turns.removeAll()
+            self.state = .idle
+            self.statusMessage = "Session cleared"
+            self.audioLevel = 0.0
+            self.startAutoHideTimer(after: 15.0)
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.clearSessionHistory()
+            }
+        }
     }
 
     public func addTurn(role: String, text: String) {

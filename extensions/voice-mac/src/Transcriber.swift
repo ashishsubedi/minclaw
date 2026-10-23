@@ -3,8 +3,10 @@ import Foundation
 public class Transcriber {
     private let whisperPath: String
     private let model: String
+    private let language: String
 
-    public init(whisperPath: String? = nil, model: String = "mlx-community/whisper-tiny") {
+    public init(whisperPath: String? = nil, model: String = "mlx-community/whisper-tiny", language: String = "en") {
+        self.language = language
         if let path = whisperPath {
             self.whisperPath = path
         } else {
@@ -53,6 +55,7 @@ public class Transcriber {
         proc.arguments = [
             audioFileURL.path,
             "--model", model,
+            "--language", language,
             "--condition-on-previous-text", "False",
             "--output-dir", tmpDir,
             "--output-name", prefix,
@@ -82,6 +85,12 @@ public class Transcriber {
             try? FileManager.default.removeItem(atPath: txtPath)
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
+
+            // Guard against noise / punctuation-only transcripts (e.g. ".", "...", "!", "-")
+            guard trimmed.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else {
+                print("[voice:stt] Filtered noise/punctuation-only transcript: \"\(trimmed)\"")
+                return ""
+            }
 
             return trimmed
         } catch {

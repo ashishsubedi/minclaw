@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, mkdirSync } from "fs";
+import { existsSync, readFileSync, mkdirSync, unlinkSync } from "fs";
 import { join, resolve } from "path";
 import { getStateDir, ensureStateDir } from "../auth/credentials.ts";
 import {
@@ -91,8 +91,14 @@ export async function startDaemon(options?: { verbose?: boolean }): Promise<void
 }
 
 export async function stopDaemon(): Promise<void> {
+  const paths = getPaths();
   const status = isDaemonRunning();
   if (!status.running) {
+    if (existsSync(paths.pid)) {
+      try {
+        unlinkSync(paths.pid);
+      } catch {}
+    }
     console.log(`${DIM}Daemon is not running.${RESET}`);
     return;
   }
@@ -103,6 +109,12 @@ export async function stopDaemon(): Promise<void> {
   for (let i = 0; i < 20; i++) {
     await Bun.sleep(250);
     if (!isDaemonRunning().running) {
+      if (existsSync(paths.pid)) {
+        try {
+          unlinkSync(paths.pid);
+        } catch {}
+      }
+      await Bun.sleep(200);
       console.log(`${GREEN}Daemon stopped.${RESET}`);
       return;
     }
@@ -112,6 +124,12 @@ export async function stopDaemon(): Promise<void> {
   try {
     process.kill(status.pid!, "SIGKILL");
   } catch {}
+  if (existsSync(paths.pid)) {
+    try {
+      unlinkSync(paths.pid);
+    } catch {}
+  }
+  await Bun.sleep(200);
   console.log(`${GREEN}Daemon killed.${RESET}`);
 }
 
