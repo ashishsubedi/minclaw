@@ -14,7 +14,9 @@
     "cli": "bun run src/cli.ts",
     "tui": "bun run src/tui/viewer.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "bun run lint && bun test",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true"
   },
   "devDependencies": {
     "@types/bun": "latest",

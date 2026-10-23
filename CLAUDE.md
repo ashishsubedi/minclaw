@@ -102,3 +102,8 @@ Skills are specialized instruction sets from the [openclaw](https://github.com/o
 - Use Bun, not Node.js
 - `bun link` to install `minclaw` globally
 - Config watcher: daemon reloads heartbeat/scheduler on `minclaw.json5` change; channel changes require restart
+
+## Quality & Linting
+
+- **Always run lint/typecheck**: All code changes must pass `bun run lint` (`tsc --noEmit`) and `bun test`.
+- **Pre-commit hook**: Enforced automatically via `.githooks/pre-commit`. Commits will fail if linting fails.
