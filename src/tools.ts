@@ -7,6 +7,8 @@ import { resolve, dirname } from "path";
 import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "fs";
 import { getChannelSender, detectMediaType, getRegisteredChannels } from "./channels/registry.ts";
 import { addJob, parseTimeToJob } from "./scheduler/scheduler.ts";
+import { listAllUnreadEmails, sendEmail } from "./email/service.ts";
+import { listAllUpcomingEvents, getLastCalendarError } from "./email/calendar.ts";
 
 export type ToolContext = {
   channel: string;
@@ -196,6 +198,41 @@ export const webFetchTool: Tool<typeof WebFetchParams> = {
   parameters: WebFetchParams,
 };
 
+const EmailParams = Type.Object({
+  action: Type.String({
+    description: "Action to perform: 'list_unread' to view unread messages, or 'send' to send an email",
+  }),
+  to: Type.Optional(Type.String({ description: "Recipient email address (required for send action)" })),
+  subject: Type.Optional(Type.String({ description: "Email subject (required for send action)" })),
+  body: Type.Optional(Type.String({ description: "Email body text (required for send action)" })),
+  from: Type.Optional(Type.String({ description: "Optional sender account email address" })),
+  limit: Type.Optional(Type.Number({ description: "Maximum number of unread emails to return (default 5)" })),
+});
+
+export const emailTool: Tool<typeof EmailParams> = {
+  name: "email",
+  description:
+    "Check unread emails or send an email across connected Google Workspace and University IMAP accounts. " +
+    "Use action='list_unread' to view incoming unread messages with subjects, senders, and snippets. " +
+    "Use action='send' with to, subject, and body to draft and send an email.",
+  parameters: EmailParams,
+};
+
+const CalendarParams = Type.Object({
+  action: Type.String({
+    description: "Action to perform: 'list_events' to see schedule and upcoming meetings",
+  }),
+  limit: Type.Optional(Type.Number({ description: "Maximum number of upcoming events to return (default 5)" })),
+});
+
+export const calendarTool: Tool<typeof CalendarParams> = {
+  name: "calendar",
+  description:
+    "Check upcoming Google Calendar events and meetings. " +
+    "Use action='list_events' to see schedule, meeting titles, start/end times, and Google Meet video links.",
+  parameters: CalendarParams,
+};
+
 export const allTools: Tool[] = [
   shellTool,
   readFileTool,
@@ -207,6 +244,8 @@ export const allTools: Tool[] = [
   sendFileTool,
   webSearchTool,
   webFetchTool,
+  emailTool,
+  calendarTool,
 ];
 
 // ── Tool execution ────────────────────────────────────────────────
@@ -914,13 +953,82 @@ async function executeWebSearch(
   }
 }
 
+async function executeEmail(args: Static<typeof EmailParams>): Promise<ToolResult> {
+  try {
+    if (args.action === "list_unread") {
+      const messages = await listAllUnreadEmails(args.limit || 5);
+      if (messages.length === 0) {
+        return { content: text("No unread emails found across connected accounts."), isError: false };
+      }
+      const formatted = messages
+        .map(
+          (m, idx) =>
+            `[${idx + 1}] From: ${m.from}\n    Account: ${m.accountEmail} (${m.accountType})\n    Subject: ${m.subject}\n    Date: ${m.date}\n    Snippet: ${m.snippet || ""}`
+        )
+        .join("\n\n");
+      return { content: text(`Found ${messages.length} unread email(s):\n\n${formatted}`), isError: false };
+    }
+
+    if (args.action === "send") {
+      if (!args.to || !args.subject || !args.body) {
+        return {
+          content: text("Error: 'to', 'subject', and 'body' are required to send an email."),
+          isError: true,
+        };
+      }
+      const res = await sendEmail(args.to, args.subject, args.body, args.from);
+      if (res.ok) {
+        return {
+          content: text(`Email sent successfully (Message ID: ${res.id || "ok"}).`),
+          isError: false,
+        };
+      }
+      return { content: text(`Failed to send email: ${res.error}`), isError: true };
+    }
+
+    return { content: text(`Invalid action: ${args.action}`), isError: true };
+  } catch (err: any) {
+    return {
+      content: text(`Email tool error: ${err.message || String(err)}`),
+      isError: true,
+    };
+  }
+}
+
+async function executeCalendar(args: Static<typeof CalendarParams>): Promise<ToolResult> {
+  try {
+    const events = await listAllUpcomingEvents(args.limit || 5);
+    const scopeErr = getLastCalendarError();
+    if (events.length === 0) {
+      if (scopeErr) {
+        return {
+          content: text(`Unable to check calendar: ${scopeErr}`),
+          isError: false,
+        };
+      }
+      return { content: text("No upcoming calendar events found."), isError: false };
+    }
+    const formatted = events
+      .map((e, idx) => {
+        const parts = [`[${idx + 1}] ${e.summary}`];
+        parts.push(`    Time: ${e.startTime} - ${e.endTime}`);
+        if (e.location) parts.push(`    Location: ${e.location}`);
+        if (e.meetLink) parts.push(`    Meet: ${e.meetLink}`);
+        parts.push(`    Account: ${e.accountEmail}`);
+        return parts.join("\n");
+      })
+      .join("\n\n");
+    return { content: text(`Upcoming Calendar Events:\n\n${formatted}`), isError: false };
+  } catch (err: any) {
+    return { content: text(`Calendar error: ${err.message || String(err)}`), isError: true };
+  }
+}
+
 export async function executeTool(
   name: string,
   args: Record<string, any>,
   context?: ToolContext
 ): Promise<ToolResult> {
-  console.log(`[agent] Tool call: ${name}(${JSON.stringify(args)})`);
-
   switch (name) {
     case "shell":
       return executeShell(args as Static<typeof ShellParams>, context);
@@ -942,6 +1050,10 @@ export async function executeTool(
       return executeWebSearch(args as Static<typeof WebSearchParams>, context);
     case "web_fetch":
       return executeWebFetch(args as Static<typeof WebFetchParams>, context);
+    case "email":
+      return executeEmail(args as Static<typeof EmailParams>);
+    case "calendar":
+      return executeCalendar(args as Static<typeof CalendarParams>);
     default:
       return { content: text(`Unknown tool: ${name}`), isError: true };
   }

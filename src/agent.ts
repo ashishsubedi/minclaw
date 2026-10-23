@@ -192,6 +192,36 @@ function buildOllamaModel(modelId: string, baseUrl: string): Model<"openai-compl
   };
 }
 
+function buildGoogleModel(modelId: string): Model<"google-generative-ai"> {
+  return {
+    id: modelId,
+    name: `Google ${modelId}`,
+    api: "google-generative-ai",
+    provider: "google",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0.15, output: 0.6, cacheRead: 0.0375, cacheWrite: 0 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  };
+}
+
+function buildAgyModel(modelId: string): Model<any> {
+  return {
+    id: modelId,
+    name: `Antigravity ${modelId}`,
+    api: "openai-completions" as any,
+    provider: "agy",
+    baseUrl: "",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1048576,
+    maxTokens: 65536,
+  };
+}
+
 function getPendingConfirmation(sessionKey: string): string | null {
   const pending = pendingShellConfirmations.get(sessionKey);
   if (!pending) return null;
@@ -227,10 +257,14 @@ async function resolveModels(config: ReturnType<typeof loadConfig>): Promise<Res
   for (const c of configs) {
     let apiKey = await getApiKeyForProvider(c.provider);
     if (c.provider === "ollama" && !apiKey) apiKey = "ollama";
+    if (c.provider === "agy" && !apiKey) apiKey = "agy";
     
     const model = c.provider === "ollama"
       ? buildOllamaModel(c.name, normalizeOllamaBaseUrl(c.baseUrl))
-      : getModel(c.provider as any, c.name as any);
+      : c.provider === "agy"
+        ? buildAgyModel(c.name)
+        : getModel(c.provider as any, c.name as any) ||
+          (c.provider === "google" ? buildGoogleModel(c.name) : undefined);
       
     if (model && apiKey) {
       resolved.push({ model, apiKey, provider: c.provider });
@@ -241,40 +275,181 @@ async function resolveModels(config: ReturnType<typeof loadConfig>): Promise<Res
   return resolved;
 }
 
+const agySessions = new Map<string, string>();
+
+export function clearAgySession(sessionKey: string): void {
+  agySessions.delete(sessionKey);
+}
+
 async function callModelWithFallback(
   resolvedModels: ResolvedModel[],
   context: { systemPrompt: string; messages: Message[]; tools: any[] },
-  options: { temperature?: number; maxTokens?: number }
+  options: { temperature?: number; maxTokens?: number },
+  sessionKey?: string
 ): Promise<{ response: Message; successfulConfig: ResolvedModel }> {
   let lastError: Error | null = null;
 
   for (const rm of resolvedModels) {
     const { model, apiKey } = rm;
+    const modelLabel = `${rm.provider}/${model.id}`;
+    console.log(`[agent] 🤖 Calling model: ${modelLabel}...`);
     debugLog(`Attempting model ${model.id} (provider=${rm.provider}, api=${model.api})`);
     
-    try {
-      const res = await completeSimple(model, context, {
-        ...options,
-        apiKey,
-        onPayload: (payload) => debugPayload("provider payload", payload),
-      });
-
-      if (res.role === "assistant" && res.errorMessage) {
-        if (res.errorMessage.includes("only authorized for use with Claude Code")) {
-          throw new Error(
-            "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
-            "Fix: set ANTHROPIC_API_KEY or run `minclaw setup` and choose API key auth.\n" +
-            "Get a key at https://console.anthropic.com/settings/keys"
-          );
+    if (rm.provider === "agy") {
+      console.log(`[agent] ⚙️ Invoking agy CLI fallback with model ${model.id}...`);
+      debugLog(`Invoking agy CLI with model ${model.id}...`);
+      try {
+        const lastMsg = context.messages[context.messages.length - 1];
+        let promptText = "";
+        if (typeof lastMsg.content === "string") {
+          promptText = lastMsg.content;
+        } else if (Array.isArray(lastMsg.content)) {
+          promptText = lastMsg.content
+            .filter((p) => p.type === "text")
+            .map((p: any) => p.text)
+            .join("\n");
+        } else {
+          promptText = String(lastMsg.content);
         }
-        throw new Error(res.errorMessage);
+
+        const conversationId = sessionKey ? agySessions.get(sessionKey) : undefined;
+        const spawnArgs = [
+          "agy",
+          "--print",
+          promptText,
+          "--model",
+          model.id,
+          "--output-format",
+          "json",
+          "--dangerously-skip-permissions",
+          "--disable-slash-commands",
+        ];
+        if (conversationId) {
+          spawnArgs.push("--conversation", conversationId);
+        }
+
+        const proc = Bun.spawn(spawnArgs, { stdout: "pipe", stderr: "pipe" });
+        const [stdout, stderr] = await Promise.all([
+          new Response(proc.stdout).text(),
+          new Response(proc.stderr).text(),
+        ]);
+        const code = await proc.exited;
+        if (code !== 0) {
+          throw new Error(`agy CLI exited with code ${code}: ${stderr || stdout}`);
+        }
+
+        let textRes = stdout.trim();
+        try {
+          const parsed = JSON.parse(stdout);
+          if (parsed.conversation_id && sessionKey) {
+            agySessions.set(sessionKey, parsed.conversation_id);
+            debugLog(`Updated agy conversation ${parsed.conversation_id} for session ${sessionKey}`);
+          }
+          if (parsed.response) {
+            textRes = parsed.response.trim();
+          }
+        } catch {
+          // Plain text fallback
+        }
+
+        const res: Message = {
+          role: "assistant",
+          content: [{ type: "text", text: textRes }],
+          stopReason: "stop",
+        } as any;
+        console.log(`[agent] ⚡ agy model ${model.id} responded`);
+        return { response: res, successfulConfig: rm };
+      } catch (err) {
+        lastError = err as Error;
+        console.warn(`[agent] ⚠️ agy model ${model.id} failed: ${lastError.message}`);
+        debugLog(`agy model ${model.id} failed: ${lastError.message}`);
+        continue;
       }
-      return { response: res, successfulConfig: rm };
-    } catch (err) {
-      lastError = err as Error;
-      debugLog(`Model ${model.id} failed: ${lastError.message}`);
-      if (rm === resolvedModels[resolvedModels.length - 1]) throw lastError;
-      debugLog("Retrying with fallback model...");
+    }
+
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      const modelStart = Date.now();
+      try {
+        const res = await completeSimple(model, context, {
+          ...options,
+          apiKey,
+          onPayload: (payload) => debugPayload("provider payload", payload),
+        });
+
+        const duration = ((Date.now() - modelStart) / 1000).toFixed(1);
+
+        if (res.role === "assistant" && res.errorMessage) {
+          const isBillingDepleted =
+            res.errorMessage.includes("402") ||
+            res.errorMessage.includes("Payment Required") ||
+            res.errorMessage.includes("prepayment credits");
+
+          const isTransient =
+            !isBillingDepleted &&
+            (res.errorMessage.includes("503") ||
+              res.errorMessage.includes("high demand") ||
+              res.errorMessage.includes("UNAVAILABLE") ||
+              res.errorMessage.includes("429") ||
+              res.errorMessage.includes("RESOURCE_EXHAUSTED"));
+
+          console.warn(`[agent] ⚠️ Model ${modelLabel} error (${duration}s): ${res.errorMessage.slice(0, 100)}`);
+
+          if (isBillingDepleted) {
+            console.warn(`[agent] 💳 Payment or prepayment credits depleted on ${modelLabel}. Skipping retries...`);
+            throw new Error(res.errorMessage);
+          }
+
+          if (isTransient && attempt < 2) {
+            const delay = (attempt + 1) * 1200;
+            console.log(`[agent] ⏳ Transient error on ${modelLabel}, retrying in ${delay}ms (attempt ${attempt + 2}/3)...`);
+            debugLog(`Transient error on ${model.id} (${res.errorMessage.slice(0, 80)}...), retrying in ${delay}ms...`);
+            await new Promise((r) => setTimeout(r, delay));
+            continue;
+          }
+
+          if (res.errorMessage.includes("only authorized for use with Claude Code")) {
+            throw new Error(
+              "Your OAuth token is restricted to Claude Code and can't be used for external API calls.\n" +
+              "Fix: set ANTHROPIC_API_KEY or run `minclaw setup` and choose API key auth.\n" +
+              "Get a key at https://console.anthropic.com/settings/keys"
+            );
+          }
+          throw new Error(res.errorMessage);
+        }
+
+        console.log(`[agent] ⚡ Model ${modelLabel} responded (${duration}s, stopReason=${res.stopReason})`);
+        return { response: res, successfulConfig: rm };
+      } catch (err) {
+        lastError = err as Error;
+        const duration = ((Date.now() - modelStart) / 1000).toFixed(1);
+        const isBillingDepleted =
+          lastError.message.includes("402") ||
+          lastError.message.includes("Payment Required") ||
+          lastError.message.includes("prepayment credits");
+
+        const isTransient =
+          !isBillingDepleted &&
+          (lastError.message.includes("503") ||
+            lastError.message.includes("high demand") ||
+            lastError.message.includes("UNAVAILABLE"));
+
+        if (isBillingDepleted) {
+          console.warn(`[agent] 💳 Payment or prepayment credits depleted on ${modelLabel}. Skipping retries...`);
+        } else if (isTransient && attempt < 2) {
+          const delay = (attempt + 1) * 1200;
+          console.log(`[agent] ⏳ Transient error on ${modelLabel} (${duration}s), retrying in ${delay}ms (attempt ${attempt + 2}/3)...`);
+          debugLog(`Transient error on ${model.id}, retrying in ${delay}ms...`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+
+        console.warn(`[agent] ❌ Model ${modelLabel} failed (${duration}s): ${lastError.message}`);
+        debugLog(`Model ${model.id} failed: ${lastError.message}`);
+        if (rm === resolvedModels[resolvedModels.length - 1] && attempt === 2) throw lastError;
+        console.log(`[agent] 🔄 Attempting fallback model...`);
+        debugLog("Retrying with fallback model...");
+        break;
+      }
     }
   }
   throw lastError || new Error("Failed to get response from any model.");
@@ -307,6 +482,8 @@ export async function runAgent(
   const primary = resolvedModels[0];
   const supportsVision = primary.model.input.includes("image");
   const messages = historyToApiMessages(history, userMessage, primary.model.api, primary.provider, supportsVision, attachments);
+  const fallbackChain = resolvedModels.map((m) => `${m.provider}/${m.model.id}`).join(" → ");
+  console.log(`[agent] Starting turn for ${sessionKey} [chain: ${fallbackChain}]`);
 
   const toolCallLog: AgentResponse["toolCalls"] = [];
   const toolCallCounts = new Map<string, number>();
@@ -332,6 +509,7 @@ export async function runAgent(
     if (commandToRun) {
       clearPendingConfirmation(sessionKey);
       if (status) await status(`Running confirmed command: ${commandToRun}`);
+      console.log(`[agent] ⚡ Running confirmed command: ${commandToRun}`);
       const result = await executeTool("shell", { command: `CONFIRM: ${commandToRun}` }, toolContext);
       const resultText = result.content.map((c) => c.text).join("\n") || "(no output)";
       
@@ -362,13 +540,18 @@ export async function runAgent(
   }
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    if (i > 0) {
+      console.log(`[agent] ── Turn iteration ${i + 1}/${MAX_TOOL_ITERATIONS} ──`);
+    }
+
     const { response: res, successfulConfig } = await callModelWithFallback(
       resolvedModels,
       { systemPrompt, messages, tools: allTools },
       { 
         maxTokens: 4096, 
         temperature: primary.model.reasoning ? undefined : 0.7 
-      }
+      },
+      sessionKey
     );
 
     if (res.role !== "assistant") {
@@ -380,6 +563,15 @@ export async function runAgent(
 
     lastUsage = summarizeUsage((res as { usage?: unknown }).usage, currentModel);
     messages.push(res);
+
+    if (Array.isArray(res.content)) {
+      for (const block of res.content) {
+        if (block.type === "thinking" && block.thinking) {
+          const clean = block.thinking.trim().replace(/\s+/g, " ");
+          console.log(`[agent] 🧠 Thinking: ${truncateLog(clean, 180)}`);
+        }
+      }
+    }
 
     if (VERBOSE) {
       const parts: string[] = [];
@@ -395,17 +587,19 @@ export async function runAgent(
       
       const responsePreview = parts.join(" ").trim();
       console.log(`[agent] ${currentModel.id} response (stopReason=${res.stopReason}): ${truncateLog(responsePreview || "(empty)", 300)}`);
-      
-      if (lastUsage) {
-        const { cost, costSource, ...u } = lastUsage;
-        console.log(`[agent] Usage (${costSource}): input=${u.input} output=${u.output} total=${u.totalTokens}${cost ? ` cost=${cost.total}` : ""}`);
-      }
     }
 
     if (res.stopReason !== "toolUse") {
       const text = Array.isArray(res.content)
         ? res.content.filter((b) => b.type === "text").map((b) => ("text" in b ? b.text : "")).join("\n") || "(no response)"
         : String(res.content);
+      const clean = text.trim().replace(/\s+/g, " ");
+      console.log(`[agent] 💬 Final response: ${truncateLog(clean, 180)}`);
+      if (lastUsage) {
+        const { cost, costSource, ...u } = lastUsage;
+        const costStr = cost?.total ? ` | $${cost.total.toFixed(4)}` : "";
+        console.log(`[agent] 📊 Tokens: in=${u.input ?? 0} out=${u.output ?? 0} total=${u.totalTokens ?? 0}${costStr}`);
+      }
       return { text, toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
     }
 
@@ -418,6 +612,7 @@ export async function runAgent(
       toolCallCounts.set(callSignature, seen);
 
       if (seen > MAX_REPEAT_TOOL_CALLS) {
+        console.warn(`[agent] ⚠️ Stuck repeating tool call: ${call.name}`);
         return {
           text: "I got stuck repeating the same tool call. Please provide more specific instructions.",
           toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
@@ -425,13 +620,14 @@ export async function runAgent(
         };
       }
 
+      console.log(`[agent] 🛠️ Tool: ${call.name}(${JSON.stringify(call.arguments)})`);
       if (status) await status(`Running tool: ${call.name}`);
+      const toolStart = Date.now();
       const result = await executeTool(call.name, call.arguments, toolContext);
+      const toolElapsed = Date.now() - toolStart;
       const resultText = result.content.map((c) => c.text).join("\n");
-
-      if (VERBOSE) {
-        console.log(`[agent] Tool ${call.name} result (error=${result.isError}): ${truncateLog(resultText, 100)}`);
-      }
+      const cleanResult = resultText.trim().replace(/\s+/g, " ");
+      console.log(`[agent] ↳ Tool ${call.name} ${result.isError ? "FAILED ❌" : "completed ✅"} (${toolElapsed}ms): ${truncateLog(cleanResult, 140)}`);
 
       toolCallLog.push({ name: call.name, input: call.arguments, output: resultText });
 

@@ -93,6 +93,13 @@ function getEnvKey(provider: string): string | undefined {
       process.env.GITHUB_TOKEN?.trim()
     );
   }
+  if (provider === "google") {
+    return (
+      process.env.GEMINI_API_KEY?.trim() ||
+      process.env.MPA_GEMINI_KEY_FREE?.trim() ||
+      process.env.MPA_GEMINI_KEY?.trim()
+    );
+  }
   if (provider === "ollama") return process.env.OLLAMA_API_KEY?.trim();
   return undefined;
 }
@@ -236,7 +243,7 @@ export async function getApiKeyForProvider(provider: string): Promise<string> {
   const cred = store[provider];
 
   if (!cred) {
-    if (provider === "ollama") return "";
+    if (provider === "ollama" || provider === "agy") return "";
     throw new Error(
       `No credentials for ${provider}. Run: minclaw setup`
     );

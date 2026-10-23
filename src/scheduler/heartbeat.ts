@@ -1,13 +1,14 @@
 import { Cron } from "croner";
 import { loadHeartbeatPrompt } from "../brain/loader.ts";
 import { loadConfig } from "../config.ts";
+import { runReflexCheck } from "./reflex.ts";
 
 /**
  * Heartbeat — a recurring cron that triggers the agent to do something.
  * Default: every hour, "Check for pending tasks, review memory, and report status."
  *
- * The heartbeat fires the agent with the configured prompt.
- * The agent can then check its memory, run pending tasks, etc.
+ * The heartbeat runs a fast, zero-token reflex check first.
+ * If no state changes or delegated tasks are found, it skips the LLM call entirely.
  */
 
 type HeartbeatCallback = (prompt: string) => void | Promise<void>;
@@ -33,11 +34,25 @@ export function startHeartbeat(onBeat: HeartbeatCallback): void {
     }
 
     isRunning = true;
-    console.log(`[heartbeat] Beat at ${new Date().toISOString()}`);
+    const nowIso = new Date().toISOString();
+    console.log(`[heartbeat] Beat at ${nowIso}`);
 
     try {
-      const prompt = await loadHeartbeatPrompt();
-      await onBeat(prompt);
+      // 1. Run zero-token reflex check
+      const reflex = await runReflexCheck();
+
+      if (!reflex.hasDelta) {
+        console.log("[heartbeat] Reflex check: idle (no actionable state changes). Skipping LLM call.");
+        return;
+      }
+
+      console.log(`[heartbeat] Reflex check: state change detected (${reflex.items.length} items). Invoking agent...`);
+      const basePrompt = await loadHeartbeatPrompt();
+      const enrichedPrompt = `${basePrompt}\n\n## Actionable Reflex Triggers\n${reflex.summary}\n\nTriage these triggers: execute tasks, update Logseq status, or message the user via Telegram if urgent.`;
+
+      await onBeat(enrichedPrompt);
+    } catch (err) {
+      console.error(`[heartbeat] Error: ${err}`);
     } finally {
       isRunning = false;
     }

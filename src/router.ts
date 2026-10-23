@@ -1,5 +1,5 @@
 import type { IncomingMessage, ReplyFn } from "./channels/types.ts";
-import { runAgent } from "./agent.ts";
+import { runAgent, clearAgySession } from "./agent.ts";
 import { appendMessage, sessionKeyFromMessage } from "./session.ts";
 import {
   appendChat,
@@ -110,6 +110,8 @@ export async function handleMessage(
       }, 1200);
     }
 
+    const agentStart = Date.now();
+    console.log(`[router] 🚀 Running agent for ${msg.channel}:${msg.sender}...`);
     const result = await runAgent(
       key,
       agentText,
@@ -117,12 +119,15 @@ export async function handleMessage(
       reply,
       { channel: msg.channel, sender: msg.sender },
       async (statusText) => {
+        console.log(`[router] Status: ${statusText}`);
         if (!statusSent && msg.channel !== "terminal") {
           await sendStatus("Working...");
         }
         await sendStatus(statusText);
       }
     );
+    const elapsed = ((Date.now() - agentStart) / 1000).toFixed(1);
+    console.log(`[router] ✅ Agent completed response for ${msg.channel}:${msg.sender} (${elapsed}s)`);
 
     // Log tool calls to chat history
     if (result.toolCalls && result.toolCalls.length > 0) {
@@ -176,6 +181,7 @@ async function handleCommand(
 
     case "/reset": {
       clearSession(sessionKey);
+      clearAgySession(sessionKey);
       await reply("Session cleared.");
       return true;
     }
