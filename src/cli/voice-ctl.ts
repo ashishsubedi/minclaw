@@ -66,6 +66,7 @@ export async function startVoice(options?: {
   mode?: string;
   hotkey?: string;
   foreground?: boolean;
+  model?: string;
 }): Promise<void> {
   if (process.platform !== "darwin") {
     console.log(`${RED}Error:${RESET} The voice extension is only supported on macOS.`);
@@ -91,6 +92,9 @@ export async function startVoice(options?: {
   }
   if (options?.hotkey) {
     args.push("--hotkey", options.hotkey);
+  }
+  if (options?.model) {
+    args.push("--model", options.model);
   }
 
   if (options?.foreground) {
@@ -175,11 +179,14 @@ if (import.meta.main || process.argv[2] === "voice") {
   const hotkeyFlag = rest.find((a) => a.startsWith("--hotkey="))?.split("=")[1] ||
                      (rest.indexOf("--hotkey") !== -1 ? rest[rest.indexOf("--hotkey") + 1] : undefined);
 
+  const modelFlag = rest.find((a) => a.startsWith("--model="))?.split("=")[1] ||
+                    (rest.indexOf("--model") !== -1 ? rest[rest.indexOf("--model") + 1] : undefined);
+
   const foreground = rest.includes("--foreground") || rest.includes("-f");
 
   switch (sub || "start") {
     case "start":
-      await startVoice({ mode: modeFlag, hotkey: hotkeyFlag, foreground });
+      await startVoice({ mode: modeFlag, hotkey: hotkeyFlag, foreground, model: modelFlag });
       break;
     case "stop":
       stopVoice();
@@ -187,7 +194,7 @@ if (import.meta.main || process.argv[2] === "voice") {
     case "restart":
       stopVoice();
       await new Promise((r) => setTimeout(r, 400));
-      await startVoice({ mode: modeFlag, hotkey: hotkeyFlag, foreground });
+      await startVoice({ mode: modeFlag, hotkey: hotkeyFlag, foreground, model: modelFlag });
       break;
     case "status":
       showVoiceStatus();

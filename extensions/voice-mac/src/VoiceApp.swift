@@ -42,17 +42,19 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
 
     private var mode: UIMode = .notch
     private var hotkeyType: HotkeyType = .rightOption
+    private var model: String?
 
-    public init(mode: UIMode = .notch, hotkey: HotkeyType = .rightOption) {
+    public init(mode: UIMode = .notch, hotkey: HotkeyType = .rightOption, model: String? = nil) {
         self.mode = mode
         self.hotkeyType = hotkey
+        self.model = model
         super.init()
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         viewModel = VoiceViewModel(uiMode: mode)
         audioRecorder = AudioRecorder()
-        transcriber = Transcriber()
+        transcriber = Transcriber(model: model)
         daemonClient = DaemonClient()
         kokoroClient = KokoroClient()
         hotkeyListener = HotkeyListener(targetKey: hotkeyType)

@@ -5,7 +5,7 @@ public class Transcriber {
     private let model: String
     private let language: String
 
-    public init(whisperPath: String? = nil, model: String = "mlx-community/whisper-tiny", language: String = "en") {
+    public init(whisperPath: String? = nil, model: String? = nil, language: String = "en") {
         self.language = language
         if let path = whisperPath {
             self.whisperPath = path
@@ -18,7 +18,13 @@ public class Transcriber {
                 self.whisperPath = "/opt/homebrew/bin/mlx_whisper"
             }
         }
-        self.model = model
+        if let model = model, !model.isEmpty {
+            self.model = model
+        } else if let envModel = ProcessInfo.processInfo.environment["WHISPER_MODEL"], !envModel.isEmpty {
+            self.model = envModel
+        } else {
+            self.model = "mlx-community/whisper-small-4bit"
+        }
     }
 
     public func prewarm() {

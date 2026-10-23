@@ -23,6 +23,7 @@ describe("Voice Extension (voice-mac)", () => {
     expect(parsed.tts.voice).toBe("af_heart");
     expect(parsed.tts.idleTimeoutSeconds).toBe(45);
     expect(parsed.stt.language).toBe("en");
+    expect(parsed.stt.model).toBe("mlx-community/whisper-small-4bit");
   });
 
   test("compiled Swift companion binary exists and is executable", () => {
@@ -38,6 +39,7 @@ describe("Voice Extension (voice-mac)", () => {
     expect(out).toContain("Usage: minclaw-voice");
     expect(out).toContain("--mode <notch|bottom>");
     expect(out).toContain("--hotkey <key>");
+    expect(out).toContain("--model <model>");
   });
 
   test("Kokoro TTS server script is executable and syntactically valid", () => {
