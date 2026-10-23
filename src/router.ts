@@ -27,7 +27,8 @@ import { getAllSkillStatuses } from "./skills/loader.ts";
 
 export async function handleMessage(
   msg: IncomingMessage,
-  reply: ReplyFn
+  reply: ReplyFn,
+  onStatus?: (status: string) => Promise<void> | void
 ): Promise<void> {
   const key = sessionKeyFromMessage(msg.channel, msg.sender);
   const text = msg.text.trim();
@@ -96,6 +97,7 @@ export async function handleMessage(
   let lastStatusAt = 0;
   let statusSent = false;
   const sendStatus = async (statusText: string): Promise<void> => {
+    if (msg.channel === "terminal" || msg.sender.startsWith("voice")) return;
     const now = Date.now();
     if (now - lastStatusAt < 3000) return;
     lastStatusAt = now;
@@ -120,10 +122,14 @@ export async function handleMessage(
       { channel: msg.channel, sender: msg.sender },
       async (statusText) => {
         console.log(`[router] Status: ${statusText}`);
-        if (!statusSent && msg.channel !== "terminal") {
-          await sendStatus("Working...");
+        if (onStatus) {
+          await onStatus(statusText);
+        } else if (msg.channel !== "terminal") {
+          if (!statusSent) {
+            await sendStatus("Working...");
+          }
+          await sendStatus(statusText);
         }
-        await sendStatus(statusText);
       }
     );
     const elapsed = ((Date.now() - agentStart) / 1000).toFixed(1);

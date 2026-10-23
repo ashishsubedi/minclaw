@@ -21,6 +21,11 @@ export type ServerMessage =
       done: boolean;
     }
   | {
+      type: "chat_status";
+      sessionId: string;
+      text: string;
+    }
+  | {
       type: "status_response";
       running: boolean;
       channels: string[];

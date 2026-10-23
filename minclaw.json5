@@ -29,8 +29,8 @@
   },
   sessions: {
     dir: './sessions',
-    maxTurns: 50,
-    maxToolIterations: 50,
+    maxTurns: 25,
+    maxToolIterations: 15,
   },
   memory: {
     dir: './memory',

@@ -3,8 +3,32 @@ import AppKit
 import SwiftUI
 import Combine
 
+public class VoicePanel: NSPanel {
+    public var onEscape: (() -> Void)?
+
+    public override var canBecomeKey: Bool {
+        return true
+    }
+
+    public override var canBecomeMain: Bool {
+        return true
+    }
+
+    public override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { // ESC key
+            onEscape?()
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    public override func cancelOperation(_ sender: Any?) {
+        onEscape?()
+    }
+}
+
 public class VoiceApp: NSObject, NSApplicationDelegate {
-    private var window: NSPanel!
+    private var window: VoicePanel!
     private var viewModel: VoiceViewModel!
     private var hotkeyListener: HotkeyListener!
     private var audioRecorder: AudioRecorder!
@@ -12,6 +36,9 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
     private var daemonClient: DaemonClient!
     private var kokoroClient: KokoroClient!
     private let tempAudioURL = URL(fileURLWithPath: "/tmp/minclaw_voice_input.wav")
+
+    private var localKeyMonitor: Any?
+    private var globalKeyMonitor: Any?
 
     private var mode: UIMode = .notch
     private var hotkeyType: HotkeyType = .rightOption
@@ -36,10 +63,13 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
         // Connect to daemon
         _ = daemonClient.connect()
 
-        // Pre-warm / ensure Kokoro server is ready
+        // Pre-warm / ensure Kokoro server is ready in background
         DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.kokoroClient.ensureServerRunning()
         }
+
+        // Pre-warm STT
+        transcriber.prewarm()
 
         // Start listening for hotkey
         hotkeyListener.start()
@@ -59,7 +89,7 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
 
         let contentRect = NSRect(x: posX, y: posY, width: windowWidth, height: windowHeight)
 
-        window = NSPanel(
+        window = VoicePanel(
             contentRect: contentRect,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -73,6 +103,10 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
         window.hasShadow = false
         window.ignoresMouseEvents = false
 
+        window.onEscape = { [weak self] in
+            self?.dismissAndStop()
+        }
+
         let rootView = Group {
             if mode == .notch {
                 NotchHUDView(viewModel: viewModel)
@@ -83,7 +117,34 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
         .frame(width: windowWidth, height: windowHeight, alignment: mode == .notch ? .top : .bottom)
 
         window.contentView = NSHostingView(rootView: rootView)
-        window.orderOut(nil) // Start hidden
+
+        // Pre-render frame to prevent initial UI stutter
+        window.alphaValue = 0.0
+        window.orderFront(nil)
+        window.orderOut(nil)
+        window.alphaValue = 1.0
+    }
+
+    public func dismissAndStop() {
+        print("[voice:app] 🛑 Dismissing UI and halting speech playback")
+        kokoroClient.stopPlayback()
+        viewModel.dismiss(force: true)
+    }
+
+    private func isIntermediateStatusMessage(_ text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("running tool:") ||
+           lower.hasPrefix("running confirmed command:") ||
+           lower.hasPrefix("tool:") ||
+           lower.hasPrefix("working...") ||
+           lower.hasPrefix("thinking...") ||
+           lower.hasPrefix("calling model:") ||
+           lower.hasPrefix("_tool calls:_") ||
+           lower.hasPrefix("**tool calls**") {
+            return true
+        }
+        return false
     }
 
     private func setupEventHandlers() {
@@ -105,6 +166,9 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
             // Interrupt any active speech (barge-in)
             self.kokoroClient.stopPlayback()
 
+            // Pre-warm Kokoro model in case it was idle
+            self.kokoroClient.ensureServerRunning()
+
             // Show window
             self.window.orderFrontRegardless()
             self.viewModel.setListening()
@@ -122,7 +186,7 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
             NSSound(named: "Pop")?.play()
 
             self.audioRecorder.stopRecording()
-            self.viewModel.setThinking(prompt: "Transcribing audio...")
+            self.viewModel.setTranscribing()
 
             // Run transcription in background
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -148,17 +212,39 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
             }
         }
 
-        // Response from daemon
+        // Intermediate status from daemon (e.g. "Running tool: calendar")
+        daemonClient.onStatus = { [weak self] status in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                print("[voice:app] ⏳ Status: \(status)")
+                self.viewModel.statusMessage = status
+            }
+        }
+
+        // Final response from daemon
         daemonClient.onMessage = { [weak self] response in
             guard let self = self else { return }
-            print("[voice:app] 🤖 MinClaw replied (\(response.text.count) chars)")
+            print("[voice:app] 🤖 MinClaw final reply (\(response.text.count) chars)")
+
+            // Filter out intermediate status or tool messages
+            if self.isIntermediateStatusMessage(response.text) {
+                print("[voice:app] ⏳ Caught intermediate status/tool message in onMessage: \(response.text)")
+                self.viewModel.statusMessage = response.text
+                return
+            }
+
+            guard self.viewModel.isVisible else {
+                print("[voice:app] UI is not visible; skipping audio playback")
+                return
+            }
 
             self.viewModel.setSpeaking(response: response.text)
 
             // Synthesize and speak via Kokoro (af_heart)
             self.kokoroClient.speak(text: response.text, voice: "af_heart") { [weak self] in
+                guard let self = self else { return }
                 print("[voice:app] Audio playback completed")
-                self?.viewModel.setIdle()
+                self.viewModel.setIdle()
             }
         }
 
@@ -168,15 +254,36 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
             self?.viewModel.setIdle()
         }
 
-        // Visibility observer
+        // Visibility observer: when UI hides, immediately halt all speech
         viewModel.$isVisible.receive(on: DispatchQueue.main).sink { [weak self] visible in
             guard let self = self else { return }
             if visible {
                 self.window.orderFrontRegardless()
             } else {
                 self.window.orderOut(nil)
+                self.kokoroClient.stopPlayback()
             }
         }.store(in: &cancellables)
+
+        // Local ESC monitor
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+            if event.keyCode == 53 && self.viewModel.isVisible {
+                self.dismissAndStop()
+                return nil
+            }
+            return event
+        }
+
+        // Global ESC monitor (when other apps have focus)
+        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return }
+            if event.keyCode == 53 && self.viewModel.isVisible {
+                DispatchQueue.main.async {
+                    self.dismissAndStop()
+                }
+            }
+        }
     }
 
     private var cancellables = Set<AnyCancellable>()

@@ -45,7 +45,15 @@ public class VoiceViewModel: ObservableObject {
         }
     }
 
+    public func setTranscribing() {
+        stopAutoHideTimer()
+        state = .thinking
+        statusMessage = "Transcribing audio..."
+        audioLevel = 0.0
+    }
+
     public func setThinking(prompt: String) {
+        stopAutoHideTimer()
         state = .thinking
         statusMessage = "Thinking..."
         audioLevel = 0.0
@@ -54,6 +62,7 @@ public class VoiceViewModel: ObservableObject {
     }
 
     public func setSpeaking(response: String) {
+        stopAutoHideTimer()
         state = .speaking
         statusMessage = "Speaking..."
         // Add assistant turn
@@ -82,19 +91,36 @@ public class VoiceViewModel: ObservableObject {
         }
     }
 
-    public func dismiss() {
+    public func dismiss(force: Bool = false) {
+        // If not forced (e.g. from auto-hide timer or hover), keep HUD visible while agent is working!
+        if !force && (state == .thinking || state == .speaking || state == .listening) {
+            print("[voice:model] ⏳ Agent is active (\(state)). Keeping HUD visible.")
+            return
+        }
+
         stopAutoHideTimer()
-        withAnimation(.easeOut(duration: 0.25)) {
+        withAnimation(.easeOut(duration: 0.2)) {
             isVisible = false
             state = .idle
+            statusMessage = ""
         }
     }
 
     public func startAutoHideTimer(after seconds: TimeInterval = 15.0) {
         stopAutoHideTimer()
+        // Only schedule auto-hide if state is idle
+        guard state == .idle else {
+            print("[voice:model] ⏳ Not scheduling auto-hide because agent is busy (\(state))")
+            return
+        }
         autoHideTimer = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
             DispatchQueue.main.async {
-                self?.dismiss()
+                guard let self = self else { return }
+                if self.state == .idle {
+                    self.dismiss(force: true)
+                } else {
+                    print("[voice:model] ⏳ Auto-hide timer fired but agent is working (\(self.state)). Suppressing hide.")
+                }
             }
         }
     }

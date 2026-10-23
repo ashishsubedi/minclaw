@@ -19,6 +19,20 @@ public class Transcriber {
         self.model = model
     }
 
+    public func prewarm() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self = self, FileManager.default.fileExists(atPath: self.whisperPath) else { return }
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: self.whisperPath)
+            proc.arguments = ["--help"]
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            try? proc.run()
+            proc.waitUntilExit()
+            print("[voice:stt] ⚡ MLX Whisper warmed up")
+        }
+    }
+
     public func transcribe(audioFileURL: URL) -> String? {
         guard FileManager.default.fileExists(atPath: audioFileURL.path) else {
             print("[voice:stt] Audio file not found at \(audioFileURL.path)")
@@ -39,6 +53,7 @@ public class Transcriber {
         proc.arguments = [
             audioFileURL.path,
             "--model", model,
+            "--condition-on-previous-text", "False",
             "--output-dir", tmpDir,
             "--output-name", prefix,
             "--output-format", "txt"
@@ -66,7 +81,9 @@ public class Transcriber {
 
             try? FileManager.default.removeItem(atPath: txtPath)
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
+            guard !trimmed.isEmpty else { return nil }
+
+            return trimmed
         } catch {
             print("[voice:stt] Transcription execution error: \(error)")
             return nil

@@ -13,6 +13,7 @@ public class DaemonClient {
     private let readQueue = DispatchQueue(label: "minclaw.voice.daemon.read")
 
     public var onMessage: ((ChatResponse) -> Void)?
+    public var onStatus: ((String) -> Void)?
     public var onError: ((String) -> Void)?
 
     public init(socketPath: String? = nil) {
@@ -146,6 +147,11 @@ public class DaemonClient {
                 let resp = ChatResponse(text: text, done: done, sessionId: sid)
                 DispatchQueue.main.async { [weak self] in
                     self?.onMessage?(resp)
+                }
+            } else if type == "chat_status" {
+                let text = json["text"] as? String ?? ""
+                DispatchQueue.main.async { [weak self] in
+                    self?.onStatus?(text)
                 }
             } else if type == "error" {
                 let errMsg = json["message"] as? String ?? "Unknown error"

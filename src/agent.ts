@@ -514,7 +514,7 @@ export async function runAgent(
 
   const memoryContext = rebuildMemoryIndex();
   const history = getMessages(sessionKey);
-  const systemPrompt = await buildSystemPrompt(config.workspace, memoryContext);
+  const systemPrompt = await buildSystemPrompt(config.workspace, memoryContext, sessionKey);
   const primary = resolvedModels[0];
   const supportsVision = primary.model.input.includes("image");
   const messages = historyToApiMessages(history, userMessage, primary.model.api, primary.provider, supportsVision, attachments);
@@ -524,7 +524,7 @@ export async function runAgent(
   const toolCallLog: AgentResponse["toolCalls"] = [];
   const toolCallCounts = new Map<string, number>();
   const MAX_REPEAT_TOOL_CALLS = 3;
-  const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 25;
+  const MAX_TOOL_ITERATIONS = config.sessions.maxToolIterations ?? 15;
   const MAX_CONSECUTIVE_TOOL_ERRORS = 4;
   let consecutiveToolErrors = 0;
   let lastUsage: UsageSummary | undefined;
@@ -716,7 +716,7 @@ export async function runAgent(
   return { text: "(max tool iterations reached)", toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
 }
 
-async function buildSystemPrompt(workspace: string, memoryContext: string): Promise<string> {
+async function buildSystemPrompt(workspace: string, memoryContext: string, sessionKey?: string): Promise<string> {
   const [system, channels, memory, skills] = await Promise.all([
     loadSystemPrompt(workspace),
     loadChannels(),
@@ -725,6 +725,15 @@ async function buildSystemPrompt(workspace: string, memoryContext: string): Prom
   ]);
 
   const parts = [system];
+
+  if (sessionKey?.includes("voice")) {
+    parts.push(
+      `## Voice Session Strict Constraints\n` +
+      `- You are speaking to the user over the macOS Voice Companion via Text-to-Speech.\n` +
+      `- STRICT LANGUAGE RESTRICTION: You strictly communicate ONLY in English and Nepali. Never respond in Korean, Japanese, Chinese, or any other language.\n` +
+      `- Audio Formatting: Keep responses conversational, natural, and concise for spoken delivery. Avoid markdown tables, ascii art, and excessive bullet points.`
+    );
+  }
 
   if (channels) {
     parts.push(channels);

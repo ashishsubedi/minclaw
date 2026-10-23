@@ -8,79 +8,75 @@ public struct FloatingHUDView: View {
             // Expandable Conversation History (appears above the bottom pill)
             if !viewModel.turns.isEmpty {
                 HistoryPanelView(viewModel: viewModel)
-                    .frame(width: 420)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .frame(width: 430)
+                    .transition(
+                        .asymmetric(
+                            insertion: .scale(scale: 0.94, anchor: .bottom).combined(with: .opacity).combined(with: .move(edge: .bottom)),
+                            removal: .scale(scale: 0.96, anchor: .bottom).combined(with: .opacity)
+                        )
+                    )
             }
 
-            // Bottom Flow Pill
-            HStack(spacing: 10) {
-                // Waveform indicator
-                HStack(spacing: 3) {
-                    ForEach(0..<5) { idx in
-                        let factor = Float(idx == 2 ? 1.0 : (idx == 1 || idx == 3 ? 0.7 : 0.4))
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.cyan)
-                            .frame(width: 3, height: max(4, CGFloat(viewModel.audioLevel * factor * 20)))
-                            .animation(.spring(response: 0.15, dampingFraction: 0.5), value: viewModel.audioLevel)
-                    }
-                }
-                .frame(width: 30)
+            // Bottom Flow Dynamic Island Capsule
+            HStack(spacing: 12) {
+                // Waveform Wing
+                SoundwaveWing(
+                    level: viewModel.audioLevel,
+                    state: viewModel.state,
+                    isLeft: true
+                )
+                .frame(width: 44, height: 24)
 
-                // Status text
-                Text(pillText)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundColor(.white)
+                // Center Notch Body & Status
+                NotchCenterBadge(
+                    state: viewModel.state,
+                    audioLevel: viewModel.audioLevel,
+                    statusMessage: viewModel.statusMessage
+                )
+                .frame(minWidth: 140)
 
-                // State Icon
-                pillIcon
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(pillColor)
+                // Waveform Wing
+                SoundwaveWing(
+                    level: viewModel.audioLevel,
+                    state: viewModel.state,
+                    isLeft: false
+                )
+                .frame(width: 44, height: 24)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(
                 Capsule()
-                    .fill(Color.black.opacity(0.88))
+                    .fill(Color.black.opacity(0.92))
                     .overlay(
                         Capsule()
-                            .stroke(pillColor.opacity(0.4), lineWidth: 1.5)
+                            .fill(Material.ultraThinMaterial)
+                            .opacity(0.3)
+                    )
+                    .overlay(
+                        NotchGlowBorder(state: viewModel.state, level: viewModel.audioLevel)
+                    )
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.white.opacity(0.2), lineWidth: 0.8)
                     )
             )
-            .shadow(color: pillColor.opacity(0.3), radius: 14, x: 0, y: 6)
+            .shadow(color: auraShadowColor, radius: 18, x: 0, y: 8)
+            .animation(.spring(response: 0.35, dampingFraction: 0.72), value: viewModel.state)
         }
         .padding(.bottom, 24)
     }
 
-    private var pillText: String {
+    private var auraShadowColor: Color {
         switch viewModel.state {
-        case .listening: return "Listening..."
-        case .thinking: return "Thinking..."
-        case .speaking: return "Speaking..."
-        case .idle: return "MinClaw Voice"
-        }
-    }
-
-    private var pillColor: Color {
-        switch viewModel.state {
-        case .listening: return .cyan
-        case .thinking: return .orange
-        case .speaking: return .green
-        case .idle: return .gray.opacity(0.5)
-        }
-    }
-
-    private var pillIcon: some View {
-        Group {
-            switch viewModel.state {
-            case .listening:
-                Image(systemName: "mic.fill")
-            case .thinking:
-                Image(systemName: "ellipsis")
-            case .speaking:
-                Image(systemName: "speaker.wave.2.fill")
-            case .idle:
-                Image(systemName: "circle.fill")
-            }
+        case .listening:
+            return Color.cyan.opacity(0.55 + Double(viewModel.audioLevel) * 0.3)
+        case .thinking:
+            return Color.orange.opacity(0.65)
+        case .speaking:
+            return Color(red: 0.2, green: 0.85, blue: 0.55).opacity(0.6)
+        case .idle:
+            return Color.black.opacity(0.3)
         }
     }
 }

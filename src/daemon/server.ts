@@ -149,8 +149,18 @@ async function handleClientMessage(
         );
       };
 
+      const onStatus = async (statusText: string) => {
+        socket.write(
+          encode({
+            type: "chat_status",
+            sessionId: msg.sessionId,
+            text: statusText,
+          })
+        );
+      };
+
       try {
-        await handleMessage(incoming, reply);
+        await handleMessage(incoming, reply, onStatus);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         socket.write(encode({ type: "error", message: errMsg }));
@@ -178,8 +188,18 @@ async function handleClientMessage(
         socket.write(encode({ type: "command_response", text }));
       };
 
+      const onStatus = async (statusText: string) => {
+        socket.write(
+          encode({
+            type: "chat_status",
+            sessionId: msg.sessionId,
+            text: statusText,
+          })
+        );
+      };
+
       try {
-        await handleMessage(incoming, reply);
+        await handleMessage(incoming, reply, onStatus);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         socket.write(encode({ type: "error", message: errMsg }));
