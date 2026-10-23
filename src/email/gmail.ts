@@ -1,5 +1,5 @@
 import { refreshGoogleAccessToken } from "./store.ts";
-import type { EmailAccount, EmailMessageSummary } from "./types.ts";
+import type { EmailAccount, EmailCategory, EmailMessageSummary } from "./types.ts";
 
 function base64url(str: string): string {
   return Buffer.from(str, "utf-8")
@@ -49,6 +49,7 @@ export async function listGoogleUnreadMessages(
       const detail = (await msgRes.json()) as {
         id: string;
         threadId?: string;
+        labelIds?: string[];
         snippet?: string;
         payload?: {
           headers?: Array<{ name: string; value: string }>;
@@ -58,6 +59,15 @@ export async function listGoogleUnreadMessages(
       const headers = detail.payload?.headers || [];
       const getHeader = (name: string) =>
         headers.find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || "";
+
+      const labelIds = detail.labelIds || [];
+      let category: EmailCategory = "other";
+      if (labelIds.includes("CATEGORY_PERSONAL")) category = "primary";
+      else if (labelIds.includes("CATEGORY_UPDATES")) category = "updates";
+      else if (labelIds.includes("CATEGORY_PROMOTIONS")) category = "promotions";
+      else if (labelIds.includes("CATEGORY_SOCIAL")) category = "social";
+      else if (labelIds.includes("CATEGORY_FORUMS")) category = "forums";
+      else if (labelIds.includes("INBOX")) category = "primary";
 
       return {
         id: detail.id,
@@ -71,6 +81,8 @@ export async function listGoogleUnreadMessages(
         date: getHeader("Date") || new Date().toISOString(),
         snippet: detail.snippet || "",
         unread: true,
+        labelIds,
+        category,
       };
     } catch {
       return null;

@@ -6,7 +6,7 @@ import type { EmailAccount, EmailMessageSummary } from "./types.ts";
 /**
  * Fetch unread messages from ALL connected email accounts (Google + IMAP)
  */
-export async function listAllUnreadEmails(maxPerAccount = 5): Promise<EmailMessageSummary[]> {
+export async function listAllUnreadEmails(maxPerAccount = 15): Promise<EmailMessageSummary[]> {
   const accounts = getEmailAccounts().filter((a) => a.status === "connected");
   const allSummaries: EmailMessageSummary[] = [];
 

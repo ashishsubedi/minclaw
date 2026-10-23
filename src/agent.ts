@@ -455,6 +455,40 @@ async function callModelWithFallback(
   throw lastError || new Error("Failed to get response from any model.");
 }
 
+/**
+ * Fast, stateless model completion for zero-tool, high-speed reflexive tasks
+ * (e.g. reflex email triage, short summaries, intent checks).
+ */
+export async function completeFast(
+  prompt: string,
+  systemPrompt = ""
+): Promise<string> {
+  const config = loadConfig();
+  const resolvedModels = await resolveModels(config);
+  if (resolvedModels.length === 0 || !resolvedModels[0]) {
+    throw new Error("No valid models could be resolved (check config and API keys).");
+  }
+
+  const { response } = await callModelWithFallback(
+    resolvedModels,
+    {
+      systemPrompt,
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
+      tools: [],
+    },
+    { temperature: 0.1, maxTokens: 1024 }
+  );
+
+  if (typeof response.content === "string") return response.content;
+  if (Array.isArray(response.content)) {
+    return response.content
+      .filter((p: any) => p.type === "text")
+      .map((p: any) => p.text)
+      .join("\n");
+  }
+  return "";
+}
+
 export async function runAgent(
   sessionKey: string,
   userMessage: string,

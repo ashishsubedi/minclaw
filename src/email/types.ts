@@ -34,6 +34,8 @@ export type EmailAccount = {
   errorMessage?: string;
 };
 
+export type EmailCategory = "primary" | "updates" | "promotions" | "social" | "forums" | "other";
+
 export type EmailMessageSummary = {
   id: string;
   threadId?: string;
@@ -46,6 +48,8 @@ export type EmailMessageSummary = {
   date: string;
   snippet?: string;
   unread: boolean;
+  labelIds?: string[];
+  category?: EmailCategory;
 };
 
 export type GoogleOAuthConfig = {
