@@ -37,6 +37,9 @@ minclaw.local.json5
 # Finder (MacOS) folder config
 .DS_Store
 
+# QA artifacts
+qa_screenshots/
+
 # sessions and memory (runtime data)
 sessions/*
 !sessions/.gitkeep
