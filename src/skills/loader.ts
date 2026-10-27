@@ -39,35 +39,27 @@ function formatFullSkillsPrompt(
   let out = "## Skills Catalog\n\n";
   out += `${ready.length} ready, ${notReady.length} available to install.\n\n`;
 
-  // Ready skills
+  // Ready skills formatted compactly
   if (ready.length > 0) {
-    const readyXml = ready
+    const readyLines = ready
       .map(
         (s) =>
-          `  <skill status="ready">\n    <name>${s.entry.name}</name>\n    <description>${s.entry.description}</description>\n    <location>${s.entry.filePath}</location>\n  </skill>`
+          `- **${s.entry.name}**: ${s.entry.description?.trim() || "No description"} (instructions: \`${s.entry.filePath}\`)`
       )
       .join("\n");
 
-    out += `<ready_skills>\n${readyXml}\n</ready_skills>\n\n`;
+    out += `<ready_skills>\n${readyLines}\n</ready_skills>\n\n`;
   }
 
-  // Not-ready skills — show what's missing and how to install
+  // Not-ready skills — on-demand discovery directive instead of 32 verbose XML blocks
   if (notReady.length > 0) {
-    const notReadyXml = notReady
-      .map((s) => {
-        const missing: string[] = [];
-        if (s.status.missing.bins.length) missing.push(`bins: ${s.status.missing.bins.join(", ")}`);
-        if (s.status.missing.env.length) missing.push(`env: ${s.status.missing.env.join(", ")}`);
-        const installOpts = s.status.install?.map((i) => i.label).join(" | ") || "manual";
-        return `  <skill status="not-installed">\n    <name>${s.entry.name}</name>\n    <description>${s.entry.description}</description>\n    <missing>${missing.join("; ")}</missing>\n    <install_options>${installOpts}</install_options>\n    <install_command>/skills install ${s.entry.name}</install_command>\n  </skill>`;
-      })
-      .join("\n");
-
-    out += `<available_skills>\n${notReadyXml}\n</available_skills>\n\n`;
+    const sampleSkills = notReady.slice(0, 8).map((s) => s.entry.name).join(", ");
+    out += `### Additional Registry Skills\n`;
+    out += `There are ${notReady.length} additional skills in the registry available to install on-demand (e.g. ${sampleSkills}, etc.).\n`;
+    out += `If a user request matches an unlisted capability, run \`/skills\` to inspect or \`/skills install <name>\` to install it.\n\n`;
   }
 
-  out += `When a user request matches a ready skill, read its SKILL.md for detailed instructions.
-If a request matches a not-installed skill, offer to install it with /skills install <name> — you can run this command yourself to install the dependency, then use the skill immediately.`;
+  out += `When a user request matches a ready skill, read its SKILL.md for detailed instructions.`;
 
   return out;
 }

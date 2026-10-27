@@ -415,6 +415,31 @@ Operating Directives:
 4. Skip Logseq Memory: Unless explicitly requested by the user or strictly critical to the task, skip Logseq memory operations (do not query Logseq tasks/graphs or sync journal pulses). This session is for user's everyday random tasks, not autonomous AI development lifecycle tracking.
 5. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.`;
 
+export function filterSystemPromptForAgy(systemPrompt: string): string {
+  if (!systemPrompt || !systemPrompt.trim()) return "";
+
+  // 1. Strip mcporter CLI section (AGY has native MCP host & call_mcp_tool)
+  let filtered = systemPrompt.replace(/## MCP Tools \(via mcporter\)[\s\S]*?(?=\n## )/, "");
+
+  // 2. Strip redundant skills that AGY natively provides
+  const redundantSkills = [
+    "fittrack",
+    "searxng",
+    "detail_search_tool",
+    "coding-agent",
+    "logseq_memory",
+    "logseq-cli",
+    "mcporter",
+  ];
+  const skillLineRegex = new RegExp(`^\\s*-\\s*\\*\\*(${redundantSkills.join("|")})\\*\\*:.*$\\n?`, "gm");
+  filtered = filtered.replace(skillLineRegex, "");
+
+  const skillXmlRegex = new RegExp(`<skill status="ready">\\s*<name>(${redundantSkills.join("|")})<\\/name>[\\s\\S]*?<\\/skill>\\n?`, "g");
+  filtered = filtered.replace(skillXmlRegex, "");
+
+  return filtered.replace(/\n{3,}/g, "\n\n").trim();
+}
+
 export function buildAgyPrompt(
   context: { systemPrompt: string; messages: Message[] },
   sessionKey?: string,
@@ -455,9 +480,12 @@ export function buildAgyPrompt(
   const sections: string[] = [AGY_STATIC_DELEGATION_HEADER];
 
   if (context.systemPrompt && context.systemPrompt.trim()) {
-    sections.push(
-      `[MinClaw System Context & Knowledge]\n${context.systemPrompt.trim()}`
-    );
+    const tailoredPrompt = filterSystemPromptForAgy(context.systemPrompt);
+    if (tailoredPrompt) {
+      sections.push(
+        `[MinClaw System Context & Knowledge]\n${tailoredPrompt}`
+      );
+    }
   }
 
   const historyTurns: string[] = [];
