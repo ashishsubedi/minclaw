@@ -1,12 +1,14 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
+import { execSync } from "child_process";
+import JSON5 from "json5";
 import { getStateDir } from "../auth/credentials.ts";
 import { loadConfig, reloadConfig, type Config } from "../config.ts";
 import { getAllSkillStatuses } from "../skills/loader.ts";
 import { getHeartbeatStatus } from "../scheduler/heartbeat.ts";
 import { listJobs, type ScheduledJob } from "../scheduler/scheduler.ts";
 import { PID_FILENAME, SOCKET_FILENAME } from "../daemon/protocol.ts";
-import { getMessages, type SessionMessage } from "../session.ts";
+import { getAllMessages, type SessionMessage } from "../session.ts";
 import { searchMemory } from "../memory/store.ts";
 
 export type UsageSummary = {
@@ -33,12 +35,34 @@ export type SessionDetail = SessionSummary & {
   messages: SessionMessage[];
 };
 
+export type ExtensionSummary = {
+  id: string;
+  name: string;
+  version?: string;
+  description?: string;
+  status: "running" | "idle" | "offline";
+  hotkey?: string;
+  mode?: string;
+  stt?: { engine?: string; model?: string };
+  tts?: { engine?: string; voice?: string };
+  pid?: number;
+};
+
+export type PermanentMemoryResult = {
+  ok: boolean;
+  path: string;
+  content: string;
+  lastModified?: number;
+};
+
 export type DashboardOverview = {
   daemon: {
     running: boolean;
     pid?: number;
     socketExists: boolean;
     stateDir: string;
+    memoryRssMb?: number;
+    uptimeSeconds?: number;
   };
   config: Config;
   sessions: {
@@ -49,6 +73,7 @@ export type DashboardOverview = {
   jobs: ScheduledJob[];
   skills: Awaited<ReturnType<typeof getAllSkillStatuses>>;
   heartbeat: ReturnType<typeof getHeartbeatStatus>;
+  extensions?: ExtensionSummary[];
 };
 
 export type DashboardConfig = {
@@ -184,13 +209,139 @@ export function listDashboardSessions(): SessionSummary[] {
 export function getDashboardSession(sessionKey: string): SessionDetail | null {
   const dir = getSessionDir();
   const filePath = join(dir, `${sessionKey}.jsonl`);
-  if (!existsSync(filePath)) return null;
+  if (!existsSync(filePath)) {
+    if (sessionKey.startsWith("web:") || sessionKey.startsWith("telegram:") || sessionKey.startsWith("whatsapp:") || sessionKey.startsWith("voice:")) {
+      const idx = sessionKey.indexOf(":");
+      return {
+        key: sessionKey,
+        channel: idx > 0 ? sessionKey.slice(0, idx) : "web",
+        sender: idx > 0 ? sessionKey.slice(idx + 1) : sessionKey,
+        lastActive: Date.now(),
+        messageCount: 0,
+        preview: "New conversation ready",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          costTotal: 0,
+          costSource: "catalog",
+        },
+        messages: [],
+      };
+    }
+    return null;
+  }
 
-  const messages = getMessages(sessionKey);
+  const messages = getAllMessages(sessionKey);
   const summary = summarizeSessionFile(filePath);
   return {
     ...summary,
     messages,
+  };
+}
+
+export function getExtensionsStatus(): ExtensionSummary[] {
+  const extensions: ExtensionSummary[] = [];
+  const voiceDir = resolve(import.meta.dir, "..", "..", "extensions", "voice-mac");
+  const manifestPath = join(voiceDir, "extension.json5");
+
+  if (existsSync(manifestPath)) {
+    try {
+      const raw = readFileSync(manifestPath, "utf-8");
+      const manifest = JSON5.parse(raw) as {
+        name?: string;
+        version?: string;
+        description?: string;
+        hotkey?: string;
+        ui?: { mode?: string };
+        stt?: { engine?: string; model?: string };
+        tts?: { engine?: string; voice?: string };
+      };
+
+      let pid: number | undefined;
+      try {
+        const out = execSync("pgrep -f minclaw-voice", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+        const p = parseInt(out.split("\n")[0] || "", 10);
+        if (Number.isFinite(p)) pid = p;
+      } catch {}
+
+      extensions.push({
+        id: "voice-mac",
+        name: manifest.name || "voice-mac",
+        version: manifest.version || "1.0.0",
+        description: manifest.description || "Voice companion for macOS",
+        status: pid ? "running" : "offline",
+        hotkey: manifest.hotkey || "right-option",
+        mode: manifest.ui?.mode || "notch",
+        stt: manifest.stt,
+        tts: manifest.tts,
+        pid,
+      });
+    } catch {
+      // ignore parse errors
+    }
+  }
+
+  return extensions;
+}
+
+export function getPermanentMemoryContent(): PermanentMemoryResult {
+  const candidates = [
+    resolve(import.meta.dir, "..", "..", "brain", "permanent-memory.md"),
+    resolve(process.cwd(), "brain", "permanent-memory.md"),
+  ];
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      try {
+        const content = readFileSync(p, "utf-8");
+        const stat = statSync(p);
+        return {
+          ok: true,
+          path: p,
+          content,
+          lastModified: stat.mtimeMs,
+        };
+      } catch {}
+    }
+  }
+
+  return {
+    ok: false,
+    path: candidates[0] || "brain/permanent-memory.md",
+    content: "",
+  };
+}
+
+export function getTemporaryMemoryContent(): PermanentMemoryResult {
+  const config = loadConfig();
+  const candidates = [
+    resolve(process.cwd(), config.memory.indexFile),
+    resolve(import.meta.dir, "..", "..", "memory", "temporary-memory.md"),
+    resolve(process.cwd(), "memory", "temporary-memory.md"),
+  ];
+
+  for (const p of candidates) {
+    if (existsSync(p)) {
+      try {
+        const content = readFileSync(p, "utf-8");
+        const stat = statSync(p);
+        return {
+          ok: true,
+          path: p,
+          content,
+          lastModified: stat.mtimeMs,
+        };
+      } catch {}
+    }
+  }
+
+  return {
+    ok: false,
+    path: candidates[0] || "memory/temporary-memory.md",
+    content: "",
   };
 }
 
@@ -218,12 +369,18 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     }
   );
 
+  const rssMb = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10;
+  const uptimeSeconds = Math.round(process.uptime());
+  const extensions = getExtensionsStatus();
+
   return {
     daemon: {
       running: isDaemonRunning(),
       pid: readDaemonPid(),
       socketExists: existsSync(join(getStateDir(), SOCKET_FILENAME)),
       stateDir: getStateDir(),
+      memoryRssMb: rssMb,
+      uptimeSeconds,
     },
     config: loadConfig(),
     sessions: {
@@ -234,6 +391,7 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     jobs: listJobs(),
     skills,
     heartbeat: getHeartbeatStatus(),
+    extensions,
   };
 }
 

@@ -39,8 +39,19 @@ type JobCallback = (job: ScheduledJob) => void;
 
 let JOBS_FILE = resolve(import.meta.dir, "../../sessions/scheduled-jobs.json");
 const activeJobs = new Map<string, Cron>();
-let jobStore: ScheduledJob[] = [];
 let onFireCallback: JobCallback | null = null;
+
+function loadJobs(): ScheduledJob[] {
+  if (!existsSync(JOBS_FILE)) return [];
+  try {
+    const raw = readFileSync(JOBS_FILE, "utf-8");
+    return JSON.parse(raw) as ScheduledJob[];
+  } catch {
+    return [];
+  }
+}
+
+let jobStore: ScheduledJob[] = loadJobs();
 
 export function setJobsFileForTest(filePath?: string): void {
   JOBS_FILE = filePath || resolve(import.meta.dir, "../../sessions/scheduled-jobs.json");
@@ -49,12 +60,6 @@ export function setJobsFileForTest(filePath?: string): void {
 
 export function setJobCallback(cb: JobCallback): void {
   onFireCallback = cb;
-}
-
-function loadJobs(): ScheduledJob[] {
-  if (!existsSync(JOBS_FILE)) return [];
-  const raw = readFileSync(JOBS_FILE, "utf-8");
-  return JSON.parse(raw) as ScheduledJob[];
 }
 
 function saveJobs(): void {
@@ -125,6 +130,22 @@ export function updateJobMode(id: string, mode?: "reminder" | "agent"): Schedule
   if (!job) return null;
   job.mode = mode;
   saveJobs();
+  return job;
+}
+
+export function triggerJob(id: string): ScheduledJob | null {
+  const job = jobStore.find((j) => j.id === id);
+  if (!job) return null;
+  console.log(`[scheduler] Manually triggering job: ${job.name} (${job.id})`);
+  job.lastRunAt = Date.now();
+  if (onFireCallback) {
+    onFireCallback(job);
+  }
+  if (job.oneShot) {
+    removeJob(job.id);
+  } else {
+    saveJobs();
+  }
   return job;
 }
 

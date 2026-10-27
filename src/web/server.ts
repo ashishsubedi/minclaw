@@ -3,14 +3,19 @@
 import { existsSync } from "fs";
 import { extname, join, resolve } from "path";
 import { handleMessage } from "../router.ts";
-import { addJob, parseTimeToJob, removeJob, updateJobMode } from "../scheduler/scheduler.ts";
+import { addJob, parseTimeToJob, removeJob, triggerJob, updateJobMode } from "../scheduler/scheduler.ts";
 import { installSkillByName, installSkillFromClawhub } from "../skills/installer.ts";
 import { syncCatalog } from "../skills/catalog.ts";
 import { sessionKeyFromMessage } from "../session.ts";
+import { loadConfig } from "../config.ts";
+import { getWhatsAppChannelStatus, requestWhatsAppPairing, resetWhatsAppAuth } from "../channels/whatsapp.ts";
 import {
   getDashboardConfig,
   getDashboardOverview,
   getDashboardSessionMessages,
+  getExtensionsStatus,
+  getPermanentMemoryContent,
+  getTemporaryMemoryContent,
   saveDashboardConfig,
   searchDashboardMemory,
 } from "./data.ts";
@@ -78,7 +83,10 @@ function text(data: string, status = 200, contentType = "text/plain; charset=utf
 }
 
 async function serveStatic(pathname: string): Promise<Response> {
-  const normalized = pathname === "/" ? "/index.html" : pathname;
+  let normalized = pathname === "/" ? "/index.html" : pathname;
+  if (normalized === "/favicon.ico") {
+    normalized = "/minclaw.svg";
+  }
   
   // Try WEB_DIR first
   let filePath = join(WEB_DIR, normalized);
@@ -102,6 +110,61 @@ async function serveStatic(pathname: string): Promise<Response> {
 async function handleApi(req: Request, url: URL): Promise<Response> {
   if (req.method === "GET" && url.pathname === "/api/overview") {
     return json(await getDashboardOverview());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/memory/permanent") {
+    return json(getPermanentMemoryContent());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/memory/temporary") {
+    return json(getTemporaryMemoryContent());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/extensions") {
+    return json({ ok: true, extensions: getExtensionsStatus() });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/channels/whatsapp/status") {
+    return json(getWhatsAppChannelStatus());
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/channels/whatsapp/pair") {
+    const force = url.searchParams.get("force") === "1" || url.searchParams.get("force") === "true";
+    const res = await requestWhatsAppPairing({ force });
+    return json(res);
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/channels/whatsapp/reset") {
+    resetWhatsAppAuth();
+    return json({ ok: true });
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/channels/telegram/status") {
+    const config = loadConfig();
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    return json({
+      enabled: !!config.channels?.telegram?.enabled,
+      hasToken: !!token,
+      ownerRecipient: config.owner?.recipient || "",
+      allowedUsers: config.channels?.telegram?.allowFrom || [],
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/channels/telegram/config") {
+    const body = (await req.json()) as { token?: string; ownerRecipient?: string };
+    if (body.token) {
+      try {
+        const res = await fetch(`https://api.telegram.org/bot${body.token.trim()}/getMe`);
+        const data = (await res.json()) as any;
+        if (!data.ok) {
+          return json({ ok: false, error: data.description || "Invalid Telegram bot token" }, 400);
+        }
+        return json({ ok: true, bot: data.result, message: `Bot verified: @${data.result.username}` });
+      } catch (err: any) {
+        return json({ ok: false, error: err.message || "Failed to reach Telegram API" }, 400);
+      }
+    }
+    return json({ ok: true });
   }
 
   if (req.method === "GET" && url.pathname === "/api/sessions") {
@@ -156,6 +219,15 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return json({ ok: true, job: updated });
   }
 
+  if (req.method === "POST" && url.pathname.startsWith("/api/jobs/") && url.pathname.endsWith("/run")) {
+    const jobId = decodeURIComponent(url.pathname.slice("/api/jobs/".length, -"/run".length));
+    const job = triggerJob(jobId);
+    if (!job) {
+      return json({ error: "Job not found" }, 404);
+    }
+    return json({ ok: true, job, message: `Job '${job.name}' triggered successfully` });
+  }
+
   if (req.method === "DELETE" && url.pathname.startsWith("/api/jobs/")) {
     const jobId = decodeURIComponent(url.pathname.slice("/api/jobs/".length));
     return json({ ok: removeJob(jobId) });
@@ -206,14 +278,25 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const textToSend = body.text?.trim();
     if (!textToSend) return text("Missing text", 400);
 
-    const sessionKey = body.sessionKey?.trim() || "web-dashboard";
+    let channel = "web";
+    let sender = "web-dashboard";
+    if (body.sessionKey) {
+      const idx = body.sessionKey.indexOf(":");
+      if (idx > 0) {
+        channel = body.sessionKey.slice(0, idx);
+        sender = body.sessionKey.slice(idx + 1);
+      } else {
+        sender = body.sessionKey;
+      }
+    }
+
     const replies: string[] = [];
-    const storedSessionKey = sessionKeyFromMessage("web", sessionKey);
+    const storedSessionKey = sessionKeyFromMessage(channel, sender);
 
     await handleMessage(
       {
-        channel: "web",
-        sender: sessionKey,
+        channel: channel as any,
+        sender,
         senderName: "Web UI",
         text: textToSend,
         timestamp: Date.now(),
