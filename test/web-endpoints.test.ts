@@ -77,3 +77,14 @@ test("WhatsApp pairing helpers accurately validate paired status", () => {
   expect(status.paired).toBe(paired);
   expect(status.state).toBeDefined();
 });
+
+test("clearSession removes jsonl and compacted session files", () => {
+  const { appendMessage, clearSession, getMessages } = require("../src/session.ts");
+  const testKey = `test:delete-me-${Date.now()}`;
+  appendMessage(testKey, { role: "user", content: "hello test", timestamp: Date.now() });
+
+  expect(getMessages(testKey).length).toBe(1);
+
+  clearSession(testKey);
+  expect(getMessages(testKey).length).toBe(0);
+});

@@ -754,6 +754,43 @@
   }
   window.refreshActiveSession = refreshActiveSession;
 
+  async function deleteActiveSession() {
+    const key = state.activeSessionKey;
+    if (!key) {
+      showToast("No active conversation selected to delete", "info");
+      return;
+    }
+    if (!confirm(`Delete conversation "${key}" and remove its history from disk?`)) {
+      return;
+    }
+
+    try {
+      await fetchJSON(`/api/sessions/${encodeURIComponent(key)}`, { method: "DELETE" });
+      showToast("Conversation deleted", "info");
+      state.sessions = state.sessions.filter((s) => s.key !== key);
+      const totalBadge = $("#sessionsCountBadge");
+      if (totalBadge) totalBadge.textContent = `${state.sessions.length} total`;
+
+      if (state.sessions.length > 0) {
+        selectSession(state.sessions[0].key);
+      } else {
+        state.activeSessionKey = null;
+        renderSessionsList();
+        const header = $("#activeSessionHeader");
+        const sub = $("#activeSessionSub");
+        const badge = $("#activeSessionTokensBadge");
+        const turnsBody = $("#sessionTurnsBody");
+        if (header) header.textContent = "No Conversation Selected";
+        if (sub) sub.textContent = "Select or start a new conversation";
+        if (badge) badge.textContent = "0 tokens";
+        if (turnsBody) turnsBody.innerHTML = `<div class="p-12 text-center text-muted">No conversations found. Start a new chat with "+ New Chat".</div>`;
+      }
+    } catch (err) {
+      showToast(`Failed to delete conversation: ${err.message}`, "error");
+    }
+  }
+  window.deleteActiveSession = deleteActiveSession;
+
   function openSpecificSession(sessionKey) {
     switchTab("sessions");
     selectSession(sessionKey);

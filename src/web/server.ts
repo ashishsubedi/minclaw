@@ -6,7 +6,9 @@ import { handleMessage } from "../router.ts";
 import { addJob, parseTimeToJob, removeJob, triggerJob, updateJobMode } from "../scheduler/scheduler.ts";
 import { installSkillByName, installSkillFromClawhub } from "../skills/installer.ts";
 import { syncCatalog } from "../skills/catalog.ts";
-import { sessionKeyFromMessage } from "../session.ts";
+import { clearSession, sessionKeyFromMessage } from "../session.ts";
+import { clearAgySession } from "../agent.ts";
+import { notifySessionCleared } from "../daemon/server.ts";
 import { loadConfig } from "../config.ts";
 import { getWhatsAppChannelStatus, requestWhatsAppPairing, resetWhatsAppAuth } from "../channels/whatsapp.ts";
 import {
@@ -176,6 +178,14 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const sessionKey = decodeURIComponent(url.pathname.slice("/api/sessions/".length));
     const session = getDashboardSessionMessages(sessionKey);
     return session ? json(session) : text("Session not found", 404);
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/api/sessions/")) {
+    const sessionKey = decodeURIComponent(url.pathname.slice("/api/sessions/".length));
+    clearSession(sessionKey);
+    clearAgySession(sessionKey);
+    notifySessionCleared(sessionKey);
+    return json({ ok: true, sessionKey });
   }
 
   if (req.method === "GET" && url.pathname === "/api/jobs") {
