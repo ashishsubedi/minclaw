@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { isSafeReadOnlyNetworkCommand } from "../src/tools.ts";
+import { isSafeReadOnlyNetworkCommand, allTools } from "../src/tools.ts";
+
+test("allTools parameter schemas do not include 'const' (Gemini function_declarations compatibility)", () => {
+  const json = JSON.stringify(allTools);
+  expect(json.includes('"const"')).toBe(false);
+});
 
 test("allows simple curl GET to public URL", () => {
   expect(isSafeReadOnlyNetworkCommand("curl -s https://api.github.com/rate_limit")).toBe(true);

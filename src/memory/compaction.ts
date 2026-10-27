@@ -3,6 +3,11 @@ import { join } from "path";
 import { loadConfig } from "../config.ts";
 import { getAllMessages, getSessionDir } from "../session.ts";
 
+export const WATERMARK_HIGH_TOKENS = 32_000;
+export const WATERMARK_HIGH_TURNS = 20;
+export const WATERMARK_KEEP_RECENT_TURNS = 4;
+export const WATERMARK_CEILING_TOKENS = 48_000;
+
 export type CompactedSessionState = {
   sessionKey: string;
   compactedCount: number;
@@ -14,6 +19,11 @@ export type CompactSessionOptions = {
   force?: boolean;
   focus?: string;
   keepRecentTurns?: number;
+  summarizer?: (prompt: string, systemPrompt: string) => Promise<string>;
+};
+
+export type AutoCompactOptions = {
+  lastInputTokens?: number;
   summarizer?: (prompt: string, systemPrompt: string) => Promise<string>;
 };
 
@@ -144,25 +154,61 @@ Guidelines:
   };
 
   saveCompactedState(newState);
+
+  // Evict bloated agy session so next turn starts with a fresh conversation
+  // seeded with the updated rolling summary, resetting tokens to Low-Water Mark.
+  try {
+    const { clearAgySession } = await import("../agent.ts");
+    clearAgySession(sessionKey);
+  } catch {
+    // Ignore if agent module not available
+  }
+
   return { compacted: true, messagesCompacted: endIdx - startIdx, state: newState };
+}
+
+export function isWatermarkBreached(sessionKey: string, lastInputTokens?: number): boolean {
+  if (typeof lastInputTokens === "number" && lastInputTokens >= WATERMARK_HIGH_TOKENS) {
+    return true;
+  }
+  const allMessages = getAllMessages(sessionKey);
+  const prevState = getCompactedState(sessionKey);
+  const compactedCount = prevState?.compactedCount ?? 0;
+  const uncompactedCount = allMessages.length - compactedCount;
+  const config = loadConfig();
+  const compactAfterTurns = config.sessions.compactAfterTurns ?? WATERMARK_HIGH_TURNS;
+  return uncompactedCount >= compactAfterTurns * 2;
 }
 
 export async function maybeAutoCompactSession(
   sessionKey: string,
-  summarizer?: (prompt: string, systemPrompt: string) => Promise<string>
+  options?: AutoCompactOptions | ((prompt: string, systemPrompt: string) => Promise<string>)
 ): Promise<boolean> {
   try {
+    const opts: AutoCompactOptions =
+      typeof options === "function" ? { summarizer: options } : options ?? {};
+
     const allMessages = getAllMessages(sessionKey);
     const prevState = getCompactedState(sessionKey);
     const compactedCount = prevState?.compactedCount ?? 0;
     const uncompactedCount = allMessages.length - compactedCount;
     const config = loadConfig();
-    const compactAfterTurns = config.sessions.compactAfterTurns ?? 16;
+    const compactAfterTurns = config.sessions.compactAfterTurns ?? WATERMARK_HIGH_TURNS;
     const threshold = compactAfterTurns * 2;
 
-    if (uncompactedCount >= threshold) {
-      const keepRecentTurns = config.sessions.keepRecentTurns ?? 8;
-      const result = await compactSession(sessionKey, { keepRecentTurns, summarizer });
+    const breachedByTurns = uncompactedCount >= threshold;
+    const breachedByTokens =
+      typeof opts.lastInputTokens === "number" && opts.lastInputTokens >= WATERMARK_HIGH_TOKENS;
+
+    if (breachedByTurns || breachedByTokens) {
+      const keepRecentTurns = breachedByTokens
+        ? WATERMARK_KEEP_RECENT_TURNS
+        : (config.sessions.keepRecentTurns ?? WATERMARK_KEEP_RECENT_TURNS);
+
+      const result = await compactSession(sessionKey, {
+        keepRecentTurns,
+        summarizer: opts.summarizer,
+      });
       return result.compacted;
     }
     return false;

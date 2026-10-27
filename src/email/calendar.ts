@@ -1,4 +1,4 @@
-import { refreshGoogleAccessToken, getEmailAccounts } from "./store.ts";
+import { refreshGoogleAccessToken, getEmailAccounts, fetchGoogleWithRetry } from "./store.ts";
 import type { EmailAccount } from "./types.ts";
 
 export type CalendarEventSummary = {
@@ -30,7 +30,7 @@ export async function listUpcomingCalendarEvents(
   lastCalendarError = null;
   if (account.type !== "google") return [];
 
-  const token = await refreshGoogleAccessToken(account);
+  let token = await refreshGoogleAccessToken(account);
   const timeMin = timeMinIso || new Date().toISOString();
 
   const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
@@ -40,9 +40,16 @@ export async function listUpcomingCalendarEvents(
   url.searchParams.set("orderBy", "startTime");
   url.searchParams.set("maxResults", String(maxResults));
 
-  const res = await fetch(url.toString(), {
+  let res = await fetchGoogleWithRetry(url.toString(), {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+  if (res.status === 401) {
+    token = await refreshGoogleAccessToken(account, true);
+    res = await fetchGoogleWithRetry(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
 
   if (!res.ok) {
     const errText = await res.text();

@@ -1,0 +1,7 @@
+# MinClaw Local Reverse Proxy
+# Routes minclaw.localhost directly to MinClaw Web Dashboard (127.0.0.1:8787)
+# Run with: brew services start caddy (or caddy start --config Caddyfile)
+
+http://minclaw.localhost {
+    reverse_proxy 127.0.0.1:8787
+}

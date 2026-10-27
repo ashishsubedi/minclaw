@@ -4,7 +4,11 @@ import { loadChannels, loadPersistentMemory, loadSystemPrompt } from "./brain/lo
 import { loadSkillsPrompt } from "./skills/loader.ts";
 import { loadConfig } from "./config.ts";
 import { rebuildMemoryIndex } from "./memory/store.ts";
-import { getCompactedState } from "./memory/compaction.ts";
+import {
+  getCompactedState,
+  WATERMARK_CEILING_TOKENS,
+  maybeAutoCompactSession,
+} from "./memory/compaction.ts";
 import { getMessages, type SessionMessage } from "./session.ts";
 import type { Attachment } from "./channels/types.ts";
 import { readImageAsBase64 } from "./media.ts";
@@ -15,6 +19,31 @@ export type AgentResponse = {
   toolCalls?: Array<{ name: string; input: unknown; output: string }>;
   usage?: UsageSummary;
 };
+
+export const AGY_MAX_OBSERVATION_CHARS = 4000;
+
+export function budgetToolOutput(raw: string, maxChars = AGY_MAX_OBSERVATION_CHARS): string {
+  if (!raw || raw.length <= maxChars) return raw;
+  return `${raw.slice(0, maxChars)}\n[...truncated ${raw.length - maxChars} chars for context window budget...]`;
+}
+
+export function isTransientAgyError(err: unknown): boolean {
+  if (!err) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes("connection reset") ||
+    lower.includes("econnreset") ||
+    lower.includes("socket hang up") ||
+    lower.includes("broken pipe") ||
+    lower.includes("epipe") ||
+    lower.includes("etimedout") ||
+    lower.includes("fetch failed") ||
+    lower.includes("premature close") ||
+    lower.includes("stream closed") ||
+    lower.includes("network error")
+  );
+}
 
 const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1";
 const DEFAULT_OLLAMA_CONTEXT_WINDOW = 8192;
@@ -300,7 +329,7 @@ function setPendingConfirmation(sessionKey: string, command: string): void {
   pendingShellConfirmations.set(sessionKey, { command, timestamp: Date.now() });
 }
 
-type ResolvedModel = {
+export type ResolvedModel = {
   model: Model<any>;
   apiKey: string;
   provider: string;
@@ -356,6 +385,10 @@ export function clearAgySession(sessionKey: string): void {
 
 export function getAgySession(sessionKey: string): string | undefined {
   return agySessions.get(sessionKey);
+}
+
+export function _setAgySessionForTest(sessionKey: string, conversationId: string): void {
+  agySessions.set(sessionKey, conversationId);
 }
 
 export const AGY_STATIC_DELEGATION_HEADER = `[MinClaw Autonomous Agent Delegation]
@@ -436,7 +469,7 @@ export function buildAgyPrompt(
       const resultText = Array.isArray(m.content)
         ? (m.content as any[]).map((c: any) => c.text || "").join("\n")
         : String(m.content);
-      historyTurns.push(`[Tool Result (${toolName})]: ${resultText.slice(0, 1000)}`);
+      historyTurns.push(`[Tool Result (${toolName})]: ${budgetToolOutput(resultText, 1000)}`);
       continue;
     }
 
@@ -471,7 +504,7 @@ export function buildAgyPrompt(
   return sections.join("\n\n");
 }
 
-async function callModelWithFallback(
+export async function callModelWithFallback(
   resolvedModels: ResolvedModel[],
   context: { systemPrompt: string; messages: Message[]; tools: any[] },
   options: { temperature?: number; maxTokens?: number },
@@ -493,226 +526,247 @@ async function callModelWithFallback(
     debugLog(`Attempting model ${model.id} (provider=${rm.provider}, api=${model.api})`);
     
     if (rm.provider === "agy") {
-      console.log(`${logPrefix} ⚙️ Invoking agy CLI with model ${model.id}...`);
-      debugLog(`Invoking agy CLI with model ${model.id}...`);
-      try {
-        const conversationId = sessionKey ? agySessions.get(sessionKey) : undefined;
-        const promptText = buildAgyPrompt(context, sessionKey, !!conversationId);
-
-        const spawnArgs = [
-          "agy",
-          "--print",
-          promptText,
-          "--model",
-          model.id,
-          "--output-format",
-          "stream-json",
-          "--dangerously-skip-permissions",
-          "--disable-slash-commands",
-          "--print-timeout",
-          "180s",
-        ];
-        if (conversationId) {
-          spawnArgs.push("--conversation", conversationId);
-        }
-
-        const proc = Bun.spawn(spawnArgs, {
-          cwd: process.cwd(),
-          stdout: "pipe",
-          stderr: "pipe",
-        });
-        activeAgyProcesses.add(proc);
-
+      for (let agyAttempt = 0; agyAttempt <= 1; agyAttempt++) {
+        const attemptLabel = agyAttempt > 0 ? ` (retry ${agyAttempt})` : "";
+        console.log(`${logPrefix} ⚙️ Invoking agy CLI with model ${model.id}...${attemptLabel}`);
+        debugLog(`Invoking agy CLI with model ${model.id}... (attempt ${agyAttempt})`);
         try {
-          const stderrPromise = new Response(proc.stderr).text();
-          const capturedToolCalls: Array<{ name: string; input: unknown; output: string }> = [];
-          let textRes = "";
-          let agyError: string | undefined;
-          let agyUsage: any = undefined;
+          const conversationId = sessionKey ? agySessions.get(sessionKey) : undefined;
+          const promptText = buildAgyPrompt(context, sessionKey, !!conversationId);
 
-          const reader = proc.stdout.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
+          const spawnArgs = [
+            "agy",
+            "--print",
+            promptText,
+            "--model",
+            model.id,
+            "--output-format",
+            "stream-json",
+            "--dangerously-skip-permissions",
+            "--disable-slash-commands",
+            "--print-timeout",
+            "180s",
+          ];
+          if (conversationId) {
+            spawnArgs.push("--conversation", conversationId);
+          }
 
-          const handleAgyJson = async (parsed: any) => {
-            // Direct legacy or single-object JSON support
-            if (parsed.status === "ERROR") {
-              agyError = parsed.error || "agy returned error status";
-              return;
-            }
-            if (parsed.conversation_id && sessionKey) {
-              agySessions.set(sessionKey, parsed.conversation_id);
-              debugLog(`Updated agy conversation ${parsed.conversation_id} for session ${sessionKey}`);
-            }
-            if (typeof parsed.response === "string" && !parsed.event) {
-              textRes = parsed.response.trim();
-            }
+          const proc = Bun.spawn(spawnArgs, {
+            cwd: process.cwd(),
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          activeAgyProcesses.add(proc);
 
-            // stream-json events
-            const eventType = parsed.event;
-            if (eventType === "init") {
-              const initConvId = parsed.conversation_id || parsed.init?.conversation_id;
-              if (initConvId && sessionKey) {
-                agySessions.set(sessionKey, initConvId);
-                debugLog(`Updated agy conversation ${initConvId} for session ${sessionKey}`);
-              }
-            } else if (eventType === "step_update") {
-              const step = parsed.step_update;
-              if (!step) return;
+          try {
+            const stderrPromise = new Response(proc.stderr).text();
+            const capturedToolCalls: Array<{ name: string; input: unknown; output: string }> = [];
+            let textRes = "";
+            let agyError: string | undefined;
+            let agyUsage: any = undefined;
 
-              if (step.step_type === "tool") {
-                const toolName = step.tool_name || step.tool_info?.name || "tool";
-                const params = step.tool_info?.parameters;
+            const reader = proc.stdout.getReader();
+            const decoder = new TextDecoder();
+            let buffer = "";
 
-                if (step.state === "ACTIVE") {
-                  let displayToolName = toolName;
-                  if (toolName === "call_mcp_tool" && params?.ToolName) {
-                    displayToolName = `mcp:${params.ToolName}`;
-                  } else if (toolName === "run_command" && params?.CommandLine) {
-                    const firstWord = String(params.CommandLine).trim().split(/\s+/)[0];
-                    displayToolName = `run_command (${firstWord})`;
-                  }
-                  const statusMsg = `Running tool: ${displayToolName}`;
-
-                  const paramsSummary = params ? truncateLog(JSON.stringify(params), 100) : "";
-                  console.log(`${logPrefix} 🔧 agy tool: ${toolName} ${paramsSummary}`);
-                  if (status) {
-                    try {
-                      await status(statusMsg);
-                    } catch (e: any) {
-                      debugLog(`status callback error: ${e.message}`);
-                    }
-                  }
-                } else if (step.state === "DONE") {
-                  const dur = typeof step.duration_seconds === "number"
-                    ? ` (${step.duration_seconds.toFixed(1)}s)`
-                    : "";
-                  const outText = typeof step.tool_info?.output === "string" ? step.tool_info.output : "";
-                  const outPreview = outText ? ` → ${truncateLog(outText.trim().replace(/\s+/g, " "), 100)}` : "";
-                  console.log(`${logPrefix} 🛠️ agy tool done: ${toolName}${dur}${outPreview}`);
-
-                  capturedToolCalls.push({
-                    name: toolName,
-                    input: params ?? {},
-                    output: outText,
-                  });
-                }
-              } else if (step.step_type === "agent_response") {
-                if (step.state === "DONE" && step.usage?.thinking_tokens) {
-                  const dur = typeof step.duration_seconds === "number"
-                    ? ` (${step.duration_seconds.toFixed(1)}s)`
-                    : "";
-                  console.log(`${logPrefix} 🧠 agy thinking${dur}: tokens in=${step.usage?.input_tokens ?? 0} out=${step.usage?.output_tokens ?? 0} thinking=${step.usage?.thinking_tokens ?? 0}`);
-                  if (status) {
-                    try {
-                      await status("Thinking...");
-                    } catch (e: any) {
-                      debugLog(`status callback error: ${e.message}`);
-                    }
-                  }
-                }
-              }
-            } else if (eventType === "result") {
-              const result = parsed.result;
-              if (!result) return;
-              if (result.status === "ERROR") {
-                agyError = result.error || "agy execution failed with error status";
+            const handleAgyJson = async (parsed: any) => {
+              // Direct legacy or single-object JSON support
+              if (parsed.status === "ERROR") {
+                agyError = parsed.error || "agy returned error status";
                 return;
               }
-              if (result.conversation_id && sessionKey) {
-                agySessions.set(sessionKey, result.conversation_id);
+              if (parsed.conversation_id && sessionKey) {
+                agySessions.set(sessionKey, parsed.conversation_id);
+                debugLog(`Updated agy conversation ${parsed.conversation_id} for session ${sessionKey}`);
               }
-              if (typeof result.response === "string") {
-                textRes = result.response.trim();
+              if (typeof parsed.response === "string" && !parsed.event) {
+                textRes = parsed.response.trim();
               }
-              if (result.usage) {
-                agyUsage = result.usage;
-              }
-              const dur = typeof result.duration_seconds === "number"
-                ? ` in ${result.duration_seconds.toFixed(1)}s`
-                : "";
-              const turns = typeof result.num_turns === "number"
-                ? ` (${result.num_turns} turn${result.num_turns === 1 ? "" : "s"})`
-                : "";
-              console.log(`${logPrefix} ⚡ agy model ${model.id} completed${dur}${turns}`);
-            }
-          };
 
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() ?? "";
-            for (const rawLine of lines) {
-              const line = rawLine.trim();
-              if (!line) continue;
+              // stream-json events
+              const eventType = parsed.event;
+              if (eventType === "init") {
+                const initConvId = parsed.conversation_id || parsed.init?.conversation_id;
+                if (initConvId && sessionKey) {
+                  agySessions.set(sessionKey, initConvId);
+                  debugLog(`Updated agy conversation ${initConvId} for session ${sessionKey}`);
+                }
+              } else if (eventType === "step_update") {
+                const step = parsed.step_update;
+                if (!step) return;
+
+                if (step.step_type === "tool") {
+                  const toolName = step.tool_name || step.tool_info?.name || "tool";
+                  const params = step.tool_info?.parameters;
+
+                  if (step.state === "ACTIVE") {
+                    let displayToolName = toolName;
+                    if (toolName === "call_mcp_tool" && params?.ToolName) {
+                      displayToolName = `mcp:${params.ToolName}`;
+                    } else if (toolName === "run_command" && params?.CommandLine) {
+                      const firstWord = String(params.CommandLine).trim().split(/\s+/)[0];
+                      displayToolName = `run_command (${firstWord})`;
+                    }
+                    const statusMsg = `Running tool: ${displayToolName}`;
+
+                    const paramsSummary = params ? truncateLog(JSON.stringify(params), 100) : "";
+                    console.log(`${logPrefix} 🔧 agy tool: ${toolName} ${paramsSummary}`);
+                    if (status) {
+                      try {
+                        await status(statusMsg);
+                      } catch (e: any) {
+                        debugLog(`status callback error: ${e.message}`);
+                      }
+                    }
+                  } else if (step.state === "DONE") {
+                    const dur = typeof step.duration_seconds === "number"
+                      ? ` (${step.duration_seconds.toFixed(1)}s)`
+                      : "";
+                    const outText = typeof step.tool_info?.output === "string" ? step.tool_info.output : "";
+                    const outPreview = outText ? ` → ${truncateLog(outText.trim().replace(/\s+/g, " "), 100)}` : "";
+                    console.log(`${logPrefix} 🛠️ agy tool done: ${toolName}${dur}${outPreview}`);
+
+                    capturedToolCalls.push({
+                      name: toolName,
+                      input: params ?? {},
+                      output: budgetToolOutput(outText),
+                    });
+                  }
+                } else if (step.step_type === "agent_response") {
+                  if (step.state === "DONE" && step.usage?.thinking_tokens) {
+                    const dur = typeof step.duration_seconds === "number"
+                      ? ` (${step.duration_seconds.toFixed(1)}s)`
+                      : "";
+                    console.log(`${logPrefix} 🧠 agy thinking${dur}: tokens in=${step.usage?.input_tokens ?? 0} out=${step.usage?.output_tokens ?? 0} thinking=${step.usage?.thinking_tokens ?? 0}`);
+                    if (status) {
+                      try {
+                        await status("Thinking...");
+                      } catch (e: any) {
+                        debugLog(`status callback error: ${e.message}`);
+                      }
+                    }
+                  }
+                }
+              } else if (eventType === "result") {
+                const result = parsed.result;
+                if (!result) return;
+                if (result.status === "ERROR") {
+                  agyError = result.error || "agy execution failed with error status";
+                  return;
+                }
+                if (result.conversation_id && sessionKey) {
+                  agySessions.set(sessionKey, result.conversation_id);
+                }
+                if (typeof result.response === "string") {
+                  textRes = result.response.trim();
+                }
+                if (result.usage) {
+                  agyUsage = result.usage;
+                }
+                const dur = typeof result.duration_seconds === "number"
+                  ? ` in ${result.duration_seconds.toFixed(1)}s`
+                  : "";
+                const turns = typeof result.num_turns === "number"
+                  ? ` (${result.num_turns} turn${result.num_turns === 1 ? "" : "s"})`
+                  : "";
+                console.log(`${logPrefix} ⚡ agy model ${model.id} completed${dur}${turns}`);
+              }
+            };
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() ?? "";
+              for (const rawLine of lines) {
+                const line = rawLine.trim();
+                if (!line) continue;
+                if (line.startsWith("{")) {
+                  try {
+                    const parsed = JSON.parse(line);
+                    await handleAgyJson(parsed);
+                    continue;
+                  } catch {
+                    // fall through to non-json logging
+                  }
+                }
+                console.log(`${agyLogPrefix} ${line}`);
+              }
+            }
+
+            if (buffer.trim()) {
+              const line = buffer.trim();
               if (line.startsWith("{")) {
                 try {
                   const parsed = JSON.parse(line);
                   await handleAgyJson(parsed);
-                  continue;
                 } catch {
-                  // fall through to non-json logging
+                  console.log(`${agyLogPrefix} ${line}`);
                 }
-              }
-              console.log(`${agyLogPrefix} ${line}`);
-            }
-          }
-
-          if (buffer.trim()) {
-            const line = buffer.trim();
-            if (line.startsWith("{")) {
-              try {
-                const parsed = JSON.parse(line);
-                await handleAgyJson(parsed);
-              } catch {
+              } else {
                 console.log(`${agyLogPrefix} ${line}`);
               }
-            } else {
-              console.log(`${agyLogPrefix} ${line}`);
             }
+
+            const stderr = (await stderrPromise).trim();
+            const code = await proc.exited;
+
+            if (agyError) {
+              throw new Error(agyError);
+            }
+            if (code !== 0) {
+              throw new Error(`agy CLI exited with code ${code}: ${stderr || textRes || "Unknown error"}`);
+            }
+
+            // Check emergency hard ceiling watermark:
+            if (sessionKey && (agyUsage?.input_tokens ?? 0) >= WATERMARK_CEILING_TOKENS) {
+              console.warn(
+                `${logPrefix} ⚠️ Emergency token watermark ceiling breached (${agyUsage.input_tokens} tokens >= ${WATERMARK_CEILING_TOKENS}). Evicting agy session.`
+              );
+              agySessions.delete(sessionKey);
+            }
+
+            const res: Message = {
+              role: "assistant",
+              content: [{ type: "text", text: textRes || "(no response)" }],
+              stopReason: "stop",
+              usage: agyUsage
+                ? {
+                    input: agyUsage.input_tokens ?? 0,
+                    output: agyUsage.output_tokens ?? 0,
+                    cacheRead: agyUsage.cache_read_tokens ?? 0,
+                    cacheWrite: 0,
+                    totalTokens: agyUsage.total_tokens ?? 0,
+                  }
+                : undefined,
+            } as any;
+
+            return {
+              response: res,
+              successfulConfig: rm,
+              agyToolCalls: capturedToolCalls,
+            };
+          } finally {
+            activeAgyProcesses.delete(proc);
           }
-
-          const stderr = (await stderrPromise).trim();
-          const code = await proc.exited;
-
-          if (agyError) {
-            throw new Error(agyError);
+        } catch (err) {
+          lastError = err as Error;
+          if (sessionKey) agySessions.delete(sessionKey);
+          if (agyAttempt === 0 && isTransientAgyError(lastError)) {
+            console.warn(
+              `${logPrefix} 🔄 Transient agy connection drop (${lastError.message}). Resetting session socket and retrying turn...`
+            );
+            debugLog(`Transient agy connection drop: ${lastError.message}. Retrying...`);
+            await new Promise((r) => setTimeout(r, 1000));
+            continue;
           }
-          if (code !== 0) {
-            throw new Error(`agy CLI exited with code ${code}: ${stderr || textRes || "Unknown error"}`);
-          }
-
-          const res: Message = {
-            role: "assistant",
-            content: [{ type: "text", text: textRes || "(no response)" }],
-            stopReason: "stop",
-            usage: agyUsage
-              ? {
-                  input: agyUsage.input_tokens ?? 0,
-                  output: agyUsage.output_tokens ?? 0,
-                  cacheRead: agyUsage.cache_read_tokens ?? 0,
-                  cacheWrite: 0,
-                  totalTokens: agyUsage.total_tokens ?? 0,
-                }
-              : undefined,
-          } as any;
-
-          return {
-            response: res,
-            successfulConfig: rm,
-            agyToolCalls: capturedToolCalls,
-          };
-        } finally {
-          activeAgyProcesses.delete(proc);
+          console.warn(`${logPrefix} ⚠️ agy model ${model.id} failed: ${lastError.message}`);
+          debugLog(`agy model ${model.id} failed: ${lastError.message}`);
+          break;
         }
-      } catch (err) {
-        lastError = err as Error;
-        console.warn(`${logPrefix} ⚠️ agy model ${model.id} failed: ${lastError.message}`);
-        debugLog(`agy model ${model.id} failed: ${lastError.message}`);
-        continue;
       }
+      continue;
     }
 
     for (let attempt = 0; attempt <= 2; attempt++) {
@@ -821,25 +875,38 @@ export async function completeFast(
   const nonAgyModels = resolvedModels.filter((rm) => rm.provider !== "agy");
   const modelsToUse = nonAgyModels.length > 0 ? nonAgyModels : resolvedModels;
 
-  const { response } = await callModelWithFallback(
-    modelsToUse,
-    {
-      systemPrompt,
-      messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
-      tools: [],
-    },
-    { temperature: 0.1, maxTokens },
-    "fast"
-  );
+  let timer: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("completeFast timed out after 30000ms")), 30_000);
+    timer?.unref?.();
+  });
 
-  if (typeof response.content === "string") return response.content;
-  if (Array.isArray(response.content)) {
-    return response.content
-      .filter((p: any) => p.type === "text")
-      .map((p: any) => p.text)
-      .join("\n");
+  try {
+    const { response } = await Promise.race([
+      callModelWithFallback(
+        modelsToUse,
+        {
+          systemPrompt,
+          messages: [{ role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() }],
+          tools: [],
+        },
+        { temperature: 0.1, maxTokens },
+        "fast"
+      ),
+      timeoutPromise,
+    ]);
+
+    if (typeof response.content === "string") return response.content;
+    if (Array.isArray(response.content)) {
+      return response.content
+        .filter((p: any) => p.type === "text")
+        .map((p: any) => p.text)
+        .join("\n");
+    }
+    return "";
+  } finally {
+    clearTimeout(timer);
   }
-  return "";
 }
 
 export async function runAgent(
@@ -993,6 +1060,9 @@ export async function runAgent(
         const costStr = cost?.total ? ` | $${cost.total.toFixed(4)}` : "";
         console.log(`${logPrefix} 📊 Tokens: in=${u.input ?? 0} out=${u.output ?? 0} total=${u.totalTokens ?? 0}${costStr}`);
       }
+      if (sessionKey && lastUsage?.input) {
+        void maybeAutoCompactSession(sessionKey, { lastInputTokens: lastUsage.input });
+      }
       return { text, toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
     }
 
@@ -1022,7 +1092,7 @@ export async function runAgent(
       const cleanResult = resultText.trim().replace(/\s+/g, " ");
       console.log(`${logPrefix} ↳ Tool ${call.name} ${result.isError ? "FAILED ❌" : "completed ✅"} (${toolElapsed}ms): ${truncateLog(cleanResult, 140)}`);
 
-      toolCallLog.push({ name: call.name, input: call.arguments, output: resultText });
+      toolCallLog.push({ name: call.name, input: call.arguments, output: budgetToolOutput(resultText) });
 
       if (result.isError) {
         consecutiveToolErrors++;
@@ -1070,6 +1140,9 @@ export async function runAgent(
     }
   }
 
+  if (sessionKey && lastUsage?.input) {
+    void maybeAutoCompactSession(sessionKey, { lastInputTokens: lastUsage.input });
+  }
   return { text: "(max tool iterations reached)", toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
 }
 

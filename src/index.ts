@@ -11,9 +11,10 @@ import {
   initScheduler,
   setJobCallback,
   stopScheduler,
+  isAgenticJob,
 } from "./scheduler/scheduler.ts";
 import { startHeartbeat, stopHeartbeat } from "./scheduler/heartbeat.ts";
-import { runAgent, killActiveAgyProcesses } from "./agent.ts";
+import { runAgent, killActiveAgyProcesses, clearAgySession } from "./agent.ts";
 import { startDaemonServer, setActiveChannels, sendToTerminalSession } from "./daemon/server.ts";
 import { getChannelSender } from "./channels/registry.ts";
 import { getStateDir, ensureStateDir } from "./auth/credentials.ts";
@@ -59,26 +60,55 @@ async function main() {
     try {
       const reminderText = job.message || "Reminder";
 
-      if (job.channel === "terminal") {
-        const delivered = sendToTerminalSession(job.sender, reminderText);
-        if (!delivered) {
+      const replyFn = async (text: string) => {
+        if (job.channel === "terminal") {
+          const delivered = sendToTerminalSession(job.sender, text);
+          if (!delivered) {
+            console.warn(
+              `[scheduler] Job "${job.name}" not delivered: terminal session ${job.sender} is offline`
+            );
+          }
+          return;
+        }
+
+        const sender = getChannelSender(job.channel);
+        if (!sender?.sendText) {
           console.warn(
-            `[scheduler] Job "${job.name}" not delivered: terminal session ${job.sender} is offline`
+            `[scheduler] Job "${job.name}" not delivered: channel "${job.channel}" has no text sender`
+          );
+          return;
+        }
+
+        await sender.sendText({ recipient: job.sender, text });
+      };
+
+      if (isAgenticJob(job)) {
+        console.log(`[scheduler] Running agentic scheduled job "${job.name}" (${job.id})...`);
+        let sentViaTool = false;
+        const wrappedReply = async (text: string) => {
+          sentViaTool = true;
+          await replyFn(text);
+        };
+
+        clearAgySession(`scheduler:${job.id}`);
+        const result = await runAgent(
+          `scheduler:${job.id}`,
+          `[Scheduled Task: ${job.name}]\n${job.message}\n\nExecute this scheduled task thoroughly using your tools and provide a clear, concise response for the user.`,
+          undefined,
+          wrappedReply,
+          { channel: job.channel, sender: job.sender }
+        );
+
+        if (!sentViaTool && result.text && result.text.trim() && result.text.trim() !== "(no response)") {
+          await replyFn(result.text);
+          console.log(
+            `[scheduler] Delivered agentic output for job "${job.name}" to ${job.channel}:${job.sender} (${result.text.length} chars)`
           );
         }
-        return;
+      } else {
+        await replyFn(reminderText);
+        console.log(`[scheduler] Delivered job "${job.name}" to ${job.channel}:${job.sender}`);
       }
-
-      const sender = getChannelSender(job.channel);
-      if (!sender?.sendText) {
-        console.warn(
-          `[scheduler] Job "${job.name}" not delivered: channel "${job.channel}" has no text sender`
-        );
-        return;
-      }
-
-      await sender.sendText({ recipient: job.sender, text: reminderText });
-      console.log(`[scheduler] Delivered job "${job.name}" to ${job.channel}:${job.sender}`);
     } catch (err) {
       console.error(`[scheduler] Job error: ${err}`);
     }
@@ -86,32 +116,40 @@ async function main() {
 
   // --- Heartbeat ---
   const heartbeatCallback = async (prompt: string) => {
-    try {
-      const currentConfig = loadConfig();
-      const owner = currentConfig.owner;
-      if (!owner?.recipient) {
-        console.log("[heartbeat] No owner recipient configured. Skipping proactive alert.");
-        return;
-      }
-      const replyFn = async (text: string) => {
-        const sender = getChannelSender(owner.channel);
-        if (sender?.sendText) {
-          await sender.sendText({ recipient: owner.recipient, text });
-        } else {
-          console.log(`[heartbeat:reply] (${owner.channel}:${owner.recipient}): ${text}`);
-        }
-      };
+    const currentConfig = loadConfig();
+    const owner = currentConfig.owner;
+    if (!owner?.recipient) {
+      console.log("[heartbeat] No owner recipient configured. Skipping proactive alert.");
+      return;
+    }
 
-      const result = await runAgent(
-        `heartbeat:${owner.recipient}`,
-        prompt,
-        undefined,
-        replyFn,
-        { channel: owner.channel, sender: owner.recipient }
+    clearAgySession(`heartbeat:${owner.recipient}`);
+
+    let sentViaTool = false;
+    const replyFn = async (text: string) => {
+      sentViaTool = true;
+      const sender = getChannelSender(owner.channel);
+      if (sender?.sendText) {
+        await sender.sendText({ recipient: owner.recipient, text });
+      } else {
+        console.log(`[heartbeat:reply] (${owner.channel}:${owner.recipient}): ${text}`);
+      }
+    };
+
+    const result = await runAgent(
+      `heartbeat:${owner.recipient}`,
+      prompt,
+      undefined,
+      replyFn,
+      { channel: owner.channel, sender: owner.recipient }
+    );
+    console.log(`[heartbeat] Agent: ${result.text.slice(0, 200)}`);
+
+    if (!sentViaTool && result.text && result.text.trim() && result.text.trim() !== "(no response)") {
+      await replyFn(result.text);
+      console.log(
+        `[heartbeat] Delivered proactive update to ${owner.channel}:${owner.recipient} (${result.text.length} chars)`
       );
-      console.log(`[heartbeat] Agent: ${result.text.slice(0, 200)}`);
-    } catch (err) {
-      console.error(`[heartbeat] Error: ${err}`);
     }
   };
   startHeartbeat(heartbeatCallback);

@@ -37,7 +37,7 @@ while !args.isEmpty {
         Options:
           --mode <notch|bottom>     UI display mode (default: notch)
           --hotkey <key>            Push-to-talk key: right-option, fn, left-option, right-command (default: right-option)
-          --model <model>           Whisper model (default: mlx-community/whisper-small-4bit or $WHISPER_MODEL)
+          --model <model>           Whisper model (default: mlx-community/whisper-small-mlx-4bit or $WHISPER_MODEL)
           --help                    Show help
         """)
         exit(0)

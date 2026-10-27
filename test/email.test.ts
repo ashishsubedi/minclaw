@@ -6,6 +6,7 @@ import {
   saveGoogleOAuthConfig,
   getGoogleOAuthConfig,
 } from "../src/email/store.ts";
+import { listImapUnreadMessages } from "../src/email/imap.ts";
 import type { EmailAccount } from "../src/email/types.ts";
 
 describe("Email Store & Multi-Account Management", () => {
@@ -93,6 +94,80 @@ describe("Email Store & Multi-Account Management", () => {
     } finally {
       if (origId) process.env.GOOGLE_CLIENT_ID = origId;
       if (origSecret) process.env.GOOGLE_CLIENT_SECRET = origSecret;
+    }
+  });
+
+  it("listImapUnreadMessages requests expanded page and filters out \\Seen envelopes", async () => {
+    const originalSpawn = Bun.spawn;
+    let capturedArgs: string[] = [];
+
+    const mockEnvelopes = [
+      {
+        id: "101",
+        subject: "Seen message with string flag",
+        flags: ["seen"],
+        from: [{ name: "Alice", email: "alice@example.com" }],
+        date: new Date().toISOString(),
+      },
+      {
+        id: "102",
+        subject: "Seen message with raw \\Seen object",
+        flags: [{ raw: "\\Seen", iana: "seen" }],
+        from: [{ name: "Bob", email: "bob@example.com" }],
+        date: new Date().toISOString(),
+      },
+      {
+        id: "103",
+        subject: "Urgent unread message 1",
+        flags: [],
+        from: [{ name: "Charlie", email: "charlie@example.com" }],
+        date: new Date().toISOString(),
+      },
+      {
+        id: "104",
+        subject: "Important unread message 2",
+        flags: [],
+        from: [{ name: "Dana", email: "dana@example.com" }],
+        date: new Date().toISOString(),
+      },
+    ];
+
+    (Bun as any).spawn = (args: string[], options?: any) => {
+      if (args[0] === "himalaya") {
+        capturedArgs = [...args];
+        return {
+          stdout: new Response(JSON.stringify(mockEnvelopes)).body,
+          stderr: new Response("").body,
+          exited: Promise.resolve(0),
+        };
+      }
+      return originalSpawn(args as any, options);
+    };
+
+    try {
+      const imapAcc: EmailAccount = {
+        id: "test_imap_filter",
+        type: "imap",
+        email: "test@uni.edu",
+        displayName: "Test IMAP",
+        createdAt: Date.now(),
+        status: "connected",
+      };
+
+      const results = await listImapUnreadMessages(imapAcc, 5);
+      expect(results.length).toBe(2);
+      expect(results[0]!.id).toBe("103");
+      expect(results[0]!.subject).toBe("Urgent unread message 1");
+      expect(results[1]!.id).toBe("104");
+      expect(results[1]!.subject).toBe("Important unread message 2");
+      expect(results.every((r) => r.unread)).toBe(true);
+
+      // Verify expanded fetch count (Math.max(5 * 3, 20) = 20)
+      const sIndex = capturedArgs.indexOf("-s");
+      expect(sIndex).toBeGreaterThan(-1);
+      expect(capturedArgs[sIndex + 1]).toBe("20");
+    } finally {
+      Bun.spawn = originalSpawn;
     }
   });
 });

@@ -16,6 +16,7 @@ export type ReflexReport = {
   hasDelta: boolean;
   items: ReflexItem[];
   summary: string;
+  commit?: () => void;
 };
 
 export type EmailScoreResult = {
@@ -68,6 +69,13 @@ function saveJson<T>(filePath: string, data: T): void {
   writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
 }
 
+export function formatLocalDate(d = new Date()): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function resolveLogseqGraph(): string {
   const custom = process.env.LOGSEQ_GRAPH;
   if (custom?.trim()) return custom.trim();
@@ -90,7 +98,7 @@ function resolveLogseqGraph(): string {
 /**
  * Check Logseq for open delegated agent tasks or human-reviewed tasks
  */
-async function checkLogseqTasks(): Promise<ReflexItem[]> {
+async function checkLogseqTasks(commits?: Array<() => void>): Promise<ReflexItem[]> {
   const items: ReflexItem[] = [];
   const graph = resolveLogseqGraph();
   const query = '[:find (pull ?b [:db/id :block/title :block/created-at :block/updated-at {:logseq.property/status [:block/title :db/ident]} {:block/tags [:block/title :block/name]} {:block/page [:block/title :block/name]} {:block/refs [:block/title :block/name]}]) :where [?t :block/name "agent_task"] [?b :block/tags ?t]]';
@@ -137,7 +145,12 @@ async function checkLogseqTasks(): Promise<ReflexItem[]> {
     }
 
     if (updated) {
-      saveJson(SEEN_TASKS_FILE, seenMap);
+      const doSave = () => saveJson(SEEN_TASKS_FILE, seenMap);
+      if (commits) {
+        commits.push(doSave);
+      } else {
+        doSave();
+      }
     }
   } catch {
     // Non-fatal if logseq CLI is temporarily busy
@@ -149,14 +162,21 @@ async function checkLogseqTasks(): Promise<ReflexItem[]> {
 /**
  * Add an informational email to the daily morning briefing digest queue
  */
-function addDigestItem(item: DigestItem): void {
-  const state = loadJson<BriefingState>(BRIEFING_STATE_FILE, {});
-  if (!state.digestItems) state.digestItems = [];
-  state.digestItems.push(item);
-  if (state.digestItems.length > 50) {
-    state.digestItems = state.digestItems.slice(-50);
+function addDigestItem(item: DigestItem, commits?: Array<() => void>): void {
+  const doSave = () => {
+    const state = loadJson<BriefingState>(BRIEFING_STATE_FILE, {});
+    if (!state.digestItems) state.digestItems = [];
+    state.digestItems.push(item);
+    if (state.digestItems.length > 50) {
+      state.digestItems = state.digestItems.slice(-50);
+    }
+    saveJson(BRIEFING_STATE_FILE, state);
+  };
+  if (commits) {
+    commits.push(doSave);
+  } else {
+    doSave();
   }
-  saveJson(BRIEFING_STATE_FILE, state);
 }
 
 function isMorningBriefingWindow(): boolean {
@@ -231,22 +251,27 @@ async function checkHimalayaFallback(seenIds: Set<string>): Promise<ReflexItem[]
 
   try {
     const proc = Bun.spawn(
-      ["himalaya", "envelope", "list", "-s", "5", "--output", "json"],
+      ["himalaya", "envelope", "list", "-s", "5", "--json"],
       { stdout: "pipe", stderr: "pipe" }
     );
     const stdout = await new Response(proc.stdout).text();
     await proc.exited;
 
     if (!stdout.trim()) return items;
-    const envelopes = JSON.parse(stdout);
-    if (Array.isArray(envelopes)) {
-      for (const env of envelopes) {
+    const parsed = JSON.parse(stdout);
+    const rawEnvelopes = Array.isArray(parsed) ? parsed : parsed?.envelopes;
+    if (Array.isArray(rawEnvelopes)) {
+      for (const env of rawEnvelopes) {
         const id = `himalaya_${String(env.id || env.internal_id || "")}`;
         if (!id || seenIds.has(id)) continue;
 
-        const flags = env.flags || [];
-        const isUnread = !flags.includes("seen") && !flags.includes("Seen");
-        if (isUnread) {
+        const rawFlags = Array.isArray(env.flags) ? env.flags : [];
+        const hasSeen = rawFlags.some((f: any) => {
+          if (typeof f === "string") return f.toLowerCase() === "seen";
+          const val = f?.iana || f?.raw || "";
+          return String(val).toLowerCase().includes("seen");
+        });
+        if (!hasSeen) {
           items.push({
             source: "email",
             title: `New Email from ${env.from?.name || env.from?.addr || "Unknown"}: ${env.subject || "(no subject)"}`,
@@ -267,7 +292,8 @@ async function checkHimalayaFallback(seenIds: Set<string>): Promise<ReflexItem[]
  */
 function checkInboxHygieneSuggestion(
   unreadList: EmailMessageSummary[],
-  stateFilePath = EMAIL_CLEANUP_STATE_FILE
+  stateFilePath = EMAIL_CLEANUP_STATE_FILE,
+  commits?: Array<() => void>
 ): ReflexItem | null {
   const promos = unreadList.filter(
     (m) => m.category === "promotions" || m.category === "social" || m.category === "forums"
@@ -275,7 +301,7 @@ function checkInboxHygieneSuggestion(
   if (promos.length < CLEANUP_PROMPT_THRESHOLD) return null;
 
   const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = formatLocalDate(now);
   const cleanupState = loadJson<{ lastPromptDate?: string }>(stateFilePath, {});
 
   // Prompt at most once every 3 days
@@ -286,7 +312,12 @@ function checkInboxHygieneSuggestion(
   }
 
   cleanupState.lastPromptDate = todayStr;
-  saveJson(stateFilePath, cleanupState);
+  const doSave = () => saveJson(stateFilePath, cleanupState);
+  if (commits) {
+    commits.push(doSave);
+  } else {
+    doSave();
+  }
 
   return {
     source: "email",
@@ -303,7 +334,7 @@ function checkInboxHygieneSuggestion(
  * 3. Gmail Promotions / Forums: Queued until Primary/Updates delta, threshold count (10+), or morning briefing.
  * 4. Scores 7-10 alert immediately, 4-6 hold for morning briefing, 0-3 silently marked seen.
  */
-async function checkEmailDeltas(): Promise<ReflexItem[]> {
+async function checkEmailDeltas(commits?: Array<() => void>): Promise<ReflexItem[]> {
   const items: ReflexItem[] = [];
   const seenIds = new Set(loadJson<string[]>(SEEN_EMAILS_FILE, []));
   let hasNew = false;
@@ -399,7 +430,7 @@ async function checkEmailDeltas(): Promise<ReflexItem[]> {
               title: `[${msg.accountEmail}] ${msg.from}: ${msg.subject}`,
               details: rating.reason || msg.snippet?.slice(0, 100) || "",
               date: msg.date,
-            });
+            }, commits);
           } else {
             // Low priority / noise (0-3): silently marked seen, no notification
           }
@@ -418,22 +449,38 @@ async function checkEmailDeltas(): Promise<ReflexItem[]> {
 
       // Empty the queue since all queued items have been classified and marked seen
       queuedLower = [];
-      saveJson(LOW_PRIORITY_EMAIL_QUEUE_FILE, queuedLower);
+      const saveQueue = () => saveJson(LOW_PRIORITY_EMAIL_QUEUE_FILE, queuedLower);
+      if (commits) {
+        commits.push(saveQueue);
+      } else {
+        saveQueue();
+      }
     }
   } else {
     // No primary delta & queue below threshold: save updated queue to disk
     // No LLM call made, zero tokens consumed!
-    saveJson(LOW_PRIORITY_EMAIL_QUEUE_FILE, queuedLower);
+    const saveQueue = () => saveJson(LOW_PRIORITY_EMAIL_QUEUE_FILE, queuedLower);
+    if (commits) {
+      commits.push(saveQueue);
+    } else {
+      saveQueue();
+    }
   }
 
   // 3. Proactive Inbox Hygiene / Cleanup Suggestion
-  const cleanupSuggestion = checkInboxHygieneSuggestion(unreadList);
+  const cleanupSuggestion = checkInboxHygieneSuggestion(unreadList, EMAIL_CLEANUP_STATE_FILE, commits);
   if (cleanupSuggestion) {
     items.push(cleanupSuggestion);
   }
 
   if (hasNew) {
-    saveJson(SEEN_EMAILS_FILE, Array.from(seenIds).slice(-300));
+    const toSave = Array.from(seenIds).slice(-300);
+    const saveEmails = () => saveJson(SEEN_EMAILS_FILE, toSave);
+    if (commits) {
+      commits.push(saveEmails);
+    } else {
+      saveEmails();
+    }
   }
 
   return items;
@@ -442,19 +489,23 @@ async function checkEmailDeltas(): Promise<ReflexItem[]> {
 /**
  * Check if morning briefing should fire (once a day between 08:30 and 09:30)
  */
-function checkBriefingDue(): ReflexItem | null {
+function checkBriefingDue(commits?: Array<() => void>): ReflexItem | null {
   const now = new Date();
   const isMorning = isMorningBriefingWindow();
   if (!isMorning) return null;
 
-  const todayStr = now.toISOString().slice(0, 10);
+  const todayStr = formatLocalDate(now);
   const state = loadJson<BriefingState>(BRIEFING_STATE_FILE, {});
   if (state.lastBriefingDate === todayStr) return null;
 
-  state.lastBriefingDate = todayStr;
   const digest = state.digestItems || [];
-  state.digestItems = []; // reset after briefing
-  saveJson(BRIEFING_STATE_FILE, state);
+  const updatedState = { ...state, lastBriefingDate: todayStr, digestItems: [] };
+  const doSave = () => saveJson(BRIEFING_STATE_FILE, updatedState);
+  if (commits) {
+    commits.push(doSave);
+  } else {
+    doSave();
+  }
 
   let details = `Local time is ${now.toLocaleTimeString()}. Provide a concise status of pending tasks and calendar items.`;
   if (digest.length > 0) {
@@ -473,18 +524,20 @@ function checkBriefingDue(): ReflexItem | null {
 /**
  * Execute the fast reflex gate
  */
-export async function runReflexCheck(): Promise<ReflexReport> {
+export async function runReflexCheck(options: { deferCommit?: boolean } = {}): Promise<ReflexReport> {
+  const deferCommit = options.deferCommit ?? false;
+  const commits: Array<() => void> = [];
   const items: ReflexItem[] = [];
 
   const [logseqItems, emailItems] = await Promise.all([
-    checkLogseqTasks(),
-    checkEmailDeltas(),
+    checkLogseqTasks(deferCommit ? commits : undefined),
+    checkEmailDeltas(deferCommit ? commits : undefined),
   ]);
 
   items.push(...logseqItems);
   items.push(...emailItems);
 
-  const briefing = checkBriefingDue();
+  const briefing = checkBriefingDue(deferCommit ? commits : undefined);
   if (briefing) {
     items.push(briefing);
   }
@@ -493,14 +546,44 @@ export async function runReflexCheck(): Promise<ReflexReport> {
   let summary = "";
 
   if (hasDelta) {
-    summary = `Reflex check detected ${items.length} actionable state changes:\n` +
-      items.map((it, idx) => `${idx + 1}. [${it.source.toUpperCase()}] ${it.title}`).join("\n");
+    summary =
+      `Reflex check detected ${items.length} actionable state changes:\n` +
+      items
+        .map((it, idx) => {
+          let line = `${idx + 1}. [${it.source.toUpperCase()}] ${it.title}`;
+          if (it.details?.trim()) {
+            line += `\n   ${it.details.trim().split("\n").join("\n   ")}`;
+          }
+          return line;
+        })
+        .join("\n");
+  }
+
+  const commitFn = () => {
+    for (const fn of commits) {
+      try {
+        fn();
+      } catch (err) {
+        console.warn(`[reflex] Commit error: ${err}`);
+      }
+    }
+    commits.length = 0;
+  };
+
+  if (deferCommit) {
+    if (!hasDelta) {
+      // Noise (0-3) or buffered updates: commit immediately since onBeat won't run
+      commitFn();
+    }
+  } else {
+    commitFn();
   }
 
   return {
     hasDelta,
     items,
     summary,
+    commit: commitFn,
   };
 }
 

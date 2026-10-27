@@ -192,22 +192,28 @@ struct NotchGlowBorder: View {
     let state: VoiceState
     let level: Float
 
+    @ViewBuilder
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let angle = Angle.degrees(time * (state == .listening ? 90 : 60))
-
+        if state == .idle {
             Capsule()
-                .stroke(
-                    AngularGradient(
-                        gradient: gradientForState,
-                        center: .center,
-                        angle: angle
-                    ),
-                    lineWidth: strokeWidth
-                )
-                .blur(radius: state == .idle ? 0 : 2.5)
-                .opacity(state == .idle ? 0 : 0.85)
+                .stroke(Color.clear, lineWidth: 0.5)
+        } else {
+            TimelineView(.animation) { timeline in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let angle = Angle.degrees(time * (state == .listening ? 90 : 60))
+
+                Capsule()
+                    .stroke(
+                        AngularGradient(
+                            gradient: gradientForState,
+                            center: .center,
+                            angle: angle
+                        ),
+                        lineWidth: strokeWidth
+                    )
+                    .blur(radius: 2.5)
+                    .opacity(0.85)
+            }
         }
     }
 
@@ -258,16 +264,34 @@ public struct SoundwaveWing: View {
     let state: VoiceState
     let isLeft: Bool
 
+    @ViewBuilder
     public var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
+        if state == .idle {
             HStack(spacing: 3) {
                 ForEach(0..<4) { index in
-                    let barH = calculateHeight(index: index, time: time)
+                    let i = isLeft ? (3 - index) : index
+                    let factor = [0.4, 0.7, 1.0, 0.65][i]
+                    let barH = CGFloat(3.0 + 3.0 * factor)
                     RoundedRectangle(cornerRadius: 2)
-                        .fill(barGradient(index: index))
+                        .fill(LinearGradient(
+                            colors: [Color.white.opacity(0.25), Color.white.opacity(0.12)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ))
                         .frame(width: 3, height: barH)
-                        .shadow(color: barGlowColor, radius: state == .idle ? 0 : 3)
+                }
+            }
+        } else {
+            TimelineView(.animation) { timeline in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                HStack(spacing: 3) {
+                    ForEach(0..<4) { index in
+                        let barH = calculateHeight(index: index, time: time)
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(barGradient(index: index))
+                            .frame(width: 3, height: barH)
+                            .shadow(color: barGlowColor, radius: 3)
+                    }
                 }
             }
         }

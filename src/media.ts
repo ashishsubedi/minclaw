@@ -88,7 +88,7 @@ async function transcribeLocalWhisper(
   binaryPath: string,
   filePath: string
 ): Promise<string | null> {
-  const model = process.env.WHISPER_MODEL?.trim() || "mlx-community/whisper-small-4bit";
+  const model = process.env.WHISPER_MODEL?.trim() || "mlx-community/whisper-small-mlx-4bit";
   const tmpOutDir = tmpdir();
   const filePrefix = `minclaw_whisper_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 

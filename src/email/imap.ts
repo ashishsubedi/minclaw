@@ -79,8 +79,9 @@ export async function listImapUnreadMessages(
   const key = sanitizeAccountKey(account.id);
 
   try {
+    const fetchCount = Math.max(maxResults * 3, 20);
     const proc = Bun.spawn(
-      ["himalaya", "-a", key, "envelope", "list", "-s", String(maxResults), "--json"],
+      ["himalaya", "-a", key, "envelope", "list", "-s", String(fetchCount), "--json"],
       { stdout: "pipe", stderr: "pipe" }
     );
     const stdout = await new Response(proc.stdout).text();
@@ -92,12 +93,16 @@ export async function listImapUnreadMessages(
     if (!Array.isArray(rawEnvelopes)) return summaries;
 
     for (const env of rawEnvelopes) {
+      if (summaries.length >= maxResults) break;
+
       const rawFlags = Array.isArray(env.flags) ? env.flags : [];
       const hasSeen = rawFlags.some((f: any) => {
         if (typeof f === "string") return f.toLowerCase() === "seen";
         const val = f?.iana || f?.raw || "";
         return String(val).toLowerCase().includes("seen");
       });
+
+      if (hasSeen) continue;
 
       let fromStr = "Unknown";
       if (Array.isArray(env.from) && env.from.length > 0) {

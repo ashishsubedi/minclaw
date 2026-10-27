@@ -74,9 +74,39 @@ export function removeEmailAccount(id: string): boolean {
 }
 
 /**
+ * Shared fetch helper with timeout and transient error retry for Google APIs
+ */
+export async function fetchGoogleWithRetry(
+  url: string | URL,
+  init?: RequestInit,
+  retries = 1,
+  timeoutMs = 15_000
+): Promise<Response> {
+  let attempt = 0;
+  while (true) {
+    try {
+      const signal = init?.signal ?? AbortSignal.timeout(timeoutMs);
+      return await fetch(url, { ...init, signal });
+    } catch (err: any) {
+      attempt++;
+      const isTransient =
+        err?.name === "TimeoutError" ||
+        /socket connection was closed|Unable to connect|ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|network/i.test(
+          String(err?.message || err)
+        );
+      if (attempt <= retries && isTransient) {
+        await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/**
  * Returns a valid Google Access Token, refreshing it via OAuth if expired or close to expiring.
  */
-export async function refreshGoogleAccessToken(account: EmailAccount): Promise<string> {
+export async function refreshGoogleAccessToken(account: EmailAccount, force = false): Promise<string> {
   if (account.type !== "google" || !account.google) {
     throw new Error(`Account ${account.email} is not a Google OAuth account.`);
   }
@@ -84,8 +114,8 @@ export async function refreshGoogleAccessToken(account: EmailAccount): Promise<s
   const { accessToken, refreshToken, expiresAt, clientId, clientSecret } = account.google;
   const now = Date.now();
 
-  // If token has at least 5 minutes left, reuse it
-  if (expiresAt && now < expiresAt - 5 * 60 * 1000) {
+  // If token has at least 5 minutes left and force is false, reuse it
+  if (!force && expiresAt && now < expiresAt - 5 * 60 * 1000) {
     return accessToken;
   }
 
@@ -100,7 +130,7 @@ export async function refreshGoogleAccessToken(account: EmailAccount): Promise<s
     grant_type: "refresh_token",
   });
 
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetchGoogleWithRetry("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: params.toString(),

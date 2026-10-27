@@ -23,7 +23,7 @@ describe("Voice Extension (voice-mac)", () => {
     expect(parsed.tts.voice).toBe("af_heart");
     expect(parsed.tts.idleTimeoutSeconds).toBe(45);
     expect(parsed.stt.language).toBe("en");
-    expect(parsed.stt.model).toBe("mlx-community/whisper-small-4bit");
+    expect(parsed.stt.model).toBe("mlx-community/whisper-small-mlx-4bit");
   });
 
   test("compiled Swift companion binary exists and is executable", () => {

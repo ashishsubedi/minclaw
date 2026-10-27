@@ -177,18 +177,26 @@
           <div class="rounded-3xl border border-white/70 bg-white/70 p-8 shadow-soft backdrop-blur-xl">
             <h2 class="text-2xl font-black mb-6">Schedule Job</h2>
             <form id="jobForm" class="grid gap-6">
-              <div class="grid gap-4 sm:grid-cols-2">
-                <div class="space-y-2">
+              <div class="grid gap-4 sm:grid-cols-3">
+                <div class="space-y-2 sm:col-span-1">
                   <label class="text-xs font-bold uppercase tracking-widest text-ink-400 ml-1">When</label>
-                  <input id="jobWhen" class="w-full rounded-2xl border border-ink-100 bg-white px-5 py-4 text-sm outline-none ring-0 placeholder:text-ink-400 focus:border-teal-500 transition-all" placeholder="in 30 minutes / at 3pm" />
+                  <input id="jobWhen" class="w-full rounded-2xl border border-ink-100 bg-white px-5 py-4 text-sm outline-none ring-0 placeholder:text-ink-400 focus:border-teal-500 transition-all" placeholder="in 30 min / every day at 8am" />
                 </div>
-                <div class="space-y-2">
-                  <label class="text-xs font-bold uppercase tracking-widest text-ink-400 ml-1">Message</label>
-                  <input id="jobMessage" class="w-full rounded-2xl border border-ink-100 bg-white px-5 py-4 text-sm outline-none ring-0 placeholder:text-ink-400 focus:border-teal-500 transition-all" placeholder="Reminder text" />
+                <div class="space-y-2 sm:col-span-1">
+                  <label class="text-xs font-bold uppercase tracking-widest text-ink-400 ml-1">Execution Mode</label>
+                  <select id="jobMode" class="w-full rounded-2xl border border-ink-100 bg-white px-4 py-4 text-sm outline-none ring-0 focus:border-teal-500 transition-all text-ink-800 font-medium">
+                    <option value="auto">Auto (Detect)</option>
+                    <option value="agent">🤖 Agent (Autonomous research)</option>
+                    <option value="reminder">🔔 Reminder (Static text)</option>
+                  </select>
+                </div>
+                <div class="space-y-2 sm:col-span-1 sm:col-span-3">
+                  <label class="text-xs font-bold uppercase tracking-widest text-ink-400 ml-1">Message / Prompt</label>
+                  <input id="jobMessage" class="w-full rounded-2xl border border-ink-100 bg-white px-5 py-4 text-sm outline-none ring-0 placeholder:text-ink-400 focus:border-teal-500 transition-all" placeholder="E.g. Daily AI Thesis Digest, summarize emails, or call mom" />
                 </div>
               </div>
               <div class="flex items-center justify-between gap-4 pt-2">
-                <p class="text-xs text-ink-400 italic font-medium">Jobs are scheduled via the default router.</p>
+                <p class="text-xs text-ink-400 italic font-medium">Agent jobs research and summarize via tools; Reminders send verbatim alerts.</p>
                 <button type="submit" class="rounded-2xl bg-teal-600 px-8 py-3.5 text-sm font-bold text-white shadow-soft transition hover:bg-teal-500">Create Job</button>
               </div>
             </form>

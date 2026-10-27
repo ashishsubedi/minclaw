@@ -3,7 +3,7 @@
 import { existsSync } from "fs";
 import { extname, join, resolve } from "path";
 import { handleMessage } from "../router.ts";
-import { removeJob } from "../scheduler/scheduler.ts";
+import { addJob, parseTimeToJob, removeJob, updateJobMode } from "../scheduler/scheduler.ts";
 import { installSkillByName, installSkillFromClawhub } from "../skills/installer.ts";
 import { syncCatalog } from "../skills/catalog.ts";
 import { sessionKeyFromMessage } from "../session.ts";
@@ -20,6 +20,7 @@ import {
   saveEmailAccount,
   getGoogleOAuthConfig,
   saveGoogleOAuthConfig,
+  refreshGoogleAccessToken,
 } from "../email/store.ts";
 import { syncHimalayaConfig } from "../email/imap.ts";
 import { listAllUnreadEmails } from "../email/service.ts";
@@ -119,6 +120,42 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     return json({ jobs: overview.jobs });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/jobs") {
+    const body = (await req.json()) as {
+      when?: string;
+      message?: string;
+      mode?: "reminder" | "agent";
+      name?: string;
+    };
+    if (!body.when || !body.message) {
+      return json({ error: "Both 'when' and 'message' are required." }, 400);
+    }
+    const parsed = parseTimeToJob(body.when, "web", "web-dashboard");
+    if (!parsed) {
+      return json(
+        { error: "Could not parse schedule time. Examples: 'in 30 minutes', 'at 3pm', 'every day at 9am'" },
+        400
+      );
+    }
+    parsed.message = body.message.trim();
+    parsed.name = (body.name || body.message).trim().slice(0, 60);
+    if (body.mode === "agent" || body.mode === "reminder") {
+      parsed.mode = body.mode;
+    }
+    const job = addJob(parsed);
+    return json({ ok: true, job });
+  }
+
+  if (req.method === "PATCH" && url.pathname.startsWith("/api/jobs/")) {
+    const jobId = decodeURIComponent(url.pathname.slice("/api/jobs/".length));
+    const body = (await req.json()) as { mode?: "reminder" | "agent" | null };
+    const updated = updateJobMode(jobId, body.mode ?? undefined);
+    if (!updated) {
+      return json({ error: "Job not found" }, 404);
+    }
+    return json({ ok: true, job: updated });
+  }
+
   if (req.method === "DELETE" && url.pathname.startsWith("/api/jobs/")) {
     const jobId = decodeURIComponent(url.pathname.slice("/api/jobs/".length));
     return json({ ok: removeJob(jobId) });
@@ -214,6 +251,28 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
     const id = decodeURIComponent(url.pathname.slice("/api/email/accounts/".length));
     const ok = removeEmailAccount(id);
     return json({ ok });
+  }
+
+  if (req.method === "POST" && url.pathname.startsWith("/api/email/accounts/") && url.pathname.endsWith("/test")) {
+    const id = decodeURIComponent(url.pathname.slice("/api/email/accounts/".length, -"/test".length));
+    const account = getEmailAccounts().find((a) => a.id === id);
+    if (!account) return json({ error: "Account not found" }, 404);
+
+    if (account.type === "google") {
+      try {
+        await refreshGoogleAccessToken(account, true);
+        return json({ ok: true, message: "Google OAuth access token refreshed & connection verified." });
+      } catch (err) {
+        return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 400);
+      }
+    } else {
+      try {
+        const emails = await listAllUnreadEmails(1, account.id);
+        return json({ ok: true, message: `IMAP connection verified (found ${emails.length} unread sample message(s)).` });
+      } catch (err) {
+        return json({ ok: false, error: err instanceof Error ? err.message : String(err) }, 400);
+      }
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/api/email/accounts/imap") {

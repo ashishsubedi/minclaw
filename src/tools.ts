@@ -142,6 +142,14 @@ const ScheduleReminderParams = Type.Object({
     description:
       "Reminder message text to send when it fires"
   }),
+  mode: Type.Optional(
+    Type.Unsafe<"reminder" | "agent">({
+      type: "string",
+      enum: ["reminder", "agent"],
+      description:
+        "Execution mode: 'reminder' sends static text; 'agent' runs the autonomous agent with tools to research/generate output at fire time",
+    })
+  ),
 });
 
 export const scheduleReminderTool: Tool<typeof ScheduleReminderParams> = {
@@ -274,7 +282,9 @@ export const compactSessionTool: Tool<typeof CompactSessionParams> = {
 
 const YoutubeParams = Type.Object({
   action: Type.Optional(
-    Type.Union([Type.Literal("play"), Type.Literal("search")], {
+    Type.Unsafe<"play" | "search">({
+      type: "string",
+      enum: ["play", "search"],
       description: "Action: 'play' to search and open video in browser (Firefox by default), or 'search' to list matching YouTube videos",
       default: "play",
     })
@@ -625,6 +635,9 @@ function executeScheduleReminder(args: Static<typeof ScheduleReminderParams>, co
 
   parsed.message = message;
   parsed.name = message.slice(0, 50);
+  if (args.mode) {
+    parsed.mode = args.mode;
+  }
 
   const job = addJob(parsed);
   const next = job.nextRunAt ? new Date(job.nextRunAt).toISOString() : "soon";

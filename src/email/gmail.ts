@@ -1,4 +1,4 @@
-import { refreshGoogleAccessToken } from "./store.ts";
+import { refreshGoogleAccessToken, fetchGoogleWithRetry } from "./store.ts";
 import type { EmailAccount, EmailCategory, EmailMessageSummary } from "./types.ts";
 
 function base64url(str: string): string {
@@ -16,12 +16,19 @@ export async function listGoogleUnreadMessages(
   account: EmailAccount,
   maxResults = 10
 ): Promise<EmailMessageSummary[]> {
-  const token = await refreshGoogleAccessToken(account);
+  let token = await refreshGoogleAccessToken(account);
 
   const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread&maxResults=${maxResults}`;
-  const listRes = await fetch(listUrl, {
+  let listRes = await fetchGoogleWithRetry(listUrl, {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+  if (listRes.status === 401) {
+    token = await refreshGoogleAccessToken(account, true);
+    listRes = await fetchGoogleWithRetry(listUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
 
   if (!listRes.ok) {
     const errText = await listRes.text();
@@ -41,9 +48,15 @@ export async function listGoogleUnreadMessages(
   const detailPromises = rawMessages.map(async (msg) => {
     try {
       const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=To`;
-      const msgRes = await fetch(msgUrl, {
+      let msgRes = await fetchGoogleWithRetry(msgUrl, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (msgRes.status === 401) {
+        token = await refreshGoogleAccessToken(account, true);
+        msgRes = await fetchGoogleWithRetry(msgUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      }
       if (!msgRes.ok) return null;
 
       const detail = (await msgRes.json()) as {
@@ -107,7 +120,7 @@ export async function sendGoogleEmail(
   bodyText: string
 ): Promise<{ ok: boolean; id?: string; error?: string }> {
   try {
-    const token = await refreshGoogleAccessToken(account);
+    let token = await refreshGoogleAccessToken(account);
 
     const rfcMessage = [
       `From: ${account.displayName ? `"${account.displayName}" <${account.email}>` : account.email}`,
@@ -121,7 +134,7 @@ export async function sendGoogleEmail(
 
     const raw = base64url(rfcMessage);
 
-    const sendRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    let sendRes = await fetchGoogleWithRetry("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -129,6 +142,18 @@ export async function sendGoogleEmail(
       },
       body: JSON.stringify({ raw }),
     });
+
+    if (sendRes.status === 401) {
+      token = await refreshGoogleAccessToken(account, true);
+      sendRes = await fetchGoogleWithRetry("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ raw }),
+      });
+    }
 
     if (!sendRes.ok) {
       const errText = await sendRes.text();
@@ -200,12 +225,19 @@ export async function readGoogleMessage(
   account: EmailAccount,
   messageId: string
 ): Promise<string> {
-  const token = await refreshGoogleAccessToken(account);
+  let token = await refreshGoogleAccessToken(account);
 
   const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`;
-  const msgRes = await fetch(msgUrl, {
+  let msgRes = await fetchGoogleWithRetry(msgUrl, {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+  if (msgRes.status === 401) {
+    token = await refreshGoogleAccessToken(account, true);
+    msgRes = await fetchGoogleWithRetry(msgUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  }
 
   if (!msgRes.ok) {
     const errText = await msgRes.text();

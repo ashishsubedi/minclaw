@@ -344,29 +344,66 @@ function renderJobs() {
     return;
   }
 
-  container.innerHTML = jobs.map(job => `
+  container.innerHTML = jobs.map(job => {
+    const mode = job.mode || "auto";
+    const modeBadge = mode === "agent"
+      ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold text-purple-700 bg-purple-50 px-2.5 py-0.5 rounded-full ring-1 ring-purple-200">🤖 Agent</span>`
+      : mode === "reminder"
+      ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full ring-1 ring-amber-200">🔔 Reminder</span>`
+      : `<span class="inline-flex items-center gap-1 text-[11px] font-bold text-teal-700 bg-teal-50 px-2.5 py-0.5 rounded-full ring-1 ring-teal-200">⚡ Auto</span>`;
+
+    return `
     <div class="rounded-3xl border border-white/70 bg-white/70 p-6 shadow-soft backdrop-blur-xl group">
       <div class="flex justify-between items-start mb-4">
         <div>
-          <h4 class="text-lg font-black text-ink-900">${job.name}</h4>
-          <p class="text-sm font-medium text-teal-600 mt-0.5">${job.cronExpr}</p>
+          <div class="flex items-center gap-2 mb-1">
+            <h4 class="text-lg font-black text-ink-900">${escapeHtml(job.name)}</h4>
+            ${modeBadge}
+          </div>
+          <p class="text-sm font-medium text-teal-600">${escapeHtml(job.cronExpr)}</p>
         </div>
-        <button data-cancel-job="${job.id}" class="text-xs font-bold text-amber-600 uppercase tracking-widest hover:text-amber-700 transition-colors">Cancel</button>
+        <div class="flex items-center gap-2">
+          <select data-toggle-mode="${escapeHtml(job.id)}" class="text-xs font-bold rounded-xl border border-ink-100 bg-white px-2.5 py-1.5 text-ink-700 outline-none hover:border-teal-500 transition shadow-xs cursor-pointer">
+            <option value="auto" ${mode === "auto" ? "selected" : ""}>Mode: Auto</option>
+            <option value="agent" ${mode === "agent" ? "selected" : ""}>Mode: 🤖 Agent</option>
+            <option value="reminder" ${mode === "reminder" ? "selected" : ""}>Mode: 🔔 Reminder</option>
+          </select>
+          <button data-cancel-job="${escapeHtml(job.id)}" class="text-xs font-bold text-amber-600 uppercase tracking-widest hover:text-amber-700 hover:bg-amber-50 px-2.5 py-1.5 rounded-xl transition">Cancel</button>
+        </div>
       </div>
-      <div class="p-4 rounded-2xl bg-ink-900 text-teal-50 text-sm leading-relaxed mb-4">
-        ${job.message}
+      <div class="p-4 rounded-2xl bg-ink-900 text-teal-50 text-sm leading-relaxed mb-4 font-mono text-xs whitespace-pre-wrap">
+        ${escapeHtml(job.message)}
       </div>
-      <div class="text-[10px] font-bold text-ink-400 uppercase tracking-widest">
-        Next run: ${job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : "Scheduling..."}
+      <div class="flex justify-between items-center text-[10px] font-bold text-ink-400 uppercase tracking-widest">
+        <span>Next run: ${job.nextRunAt ? new Date(job.nextRunAt).toLocaleString() : "Scheduling..."}</span>
+        ${job.lastRunAt ? `<span>Last: ${new Date(job.lastRunAt).toLocaleTimeString()}</span>` : ""}
       </div>
     </div>
-  `).join("");
+  `;
+  }).join("");
 
   $$("[data-cancel-job]").forEach(btn => {
     btn.onclick = async () => {
       if (confirm("Cancel this job?")) {
         await fetchJSON(`/api/jobs/${encodeURIComponent(btn.getAttribute("data-cancel-job"))}`, { method: "DELETE" });
         await loadOverview();
+      }
+    };
+  });
+
+  $$("[data-toggle-mode]").forEach(select => {
+    select.onchange = async () => {
+      const id = select.getAttribute("data-toggle-mode");
+      const val = select.value === "auto" ? null : select.value;
+      try {
+        await fetchJSON(`/api/jobs/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ mode: val }),
+        });
+        await loadOverview();
+      } catch (err) {
+        alert(`Failed to update mode: ${err.message}`);
       }
     };
   });
@@ -420,20 +457,27 @@ async function submitJob(e) {
   e.preventDefault();
   const whenEl = $("#jobWhen");
   const msgEl = $("#jobMessage");
+  const modeEl = $("#jobMode");
   if (!whenEl || !msgEl) return;
 
   const when = whenEl.value.trim();
   const message = msgEl.value.trim();
+  const mode = modeEl ? modeEl.value : "auto";
   if (!when || !message) return;
 
   try {
-    await fetchJSON("/api/chat", {
+    await fetchJSON("/api/jobs", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: `/schedule ${when} ${message}`, sessionKey: "web-dashboard" }),
+      body: JSON.stringify({
+        when,
+        message,
+        mode: mode === "auto" ? undefined : mode,
+      }),
     });
     whenEl.value = "";
     msgEl.value = "";
+    if (modeEl) modeEl.value = "auto";
     await loadOverview();
     switchTab("jobs");
   } catch (err) {
@@ -514,13 +558,40 @@ async function loadEmailAccounts() {
                 ${acc.imapHost ? `<p class="text-[10px] text-ink-400 font-mono mt-0.5">${escapeHtml(acc.imapHost)}</p>` : ""}
               </div>
             </div>
-            <button data-disconnect-id="${escapeHtml(acc.id)}" class="disconnect-btn text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-3 py-1.5 rounded-xl transition">
-              Disconnect
-            </button>
+            <div class="flex items-center gap-2">
+              <button data-test-id="${escapeHtml(acc.id)}" class="test-account-btn text-xs font-bold text-teal-600 hover:text-teal-700 hover:bg-teal-50 px-3 py-1.5 rounded-xl transition">
+                Test Connection
+              </button>
+              <button data-disconnect-id="${escapeHtml(acc.id)}" class="disconnect-btn text-xs font-bold text-rose-600 hover:text-rose-700 hover:bg-rose-50 px-3 py-1.5 rounded-xl transition">
+                Disconnect
+              </button>
+            </div>
           </div>
         `;
       })
       .join("");
+
+    $$(".test-account-btn").forEach((btn) => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute("data-test-id");
+        btn.textContent = "Testing...";
+        btn.disabled = true;
+        try {
+          const res = await fetchJSON(`/api/email/accounts/${encodeURIComponent(id)}/test`, { method: "POST" });
+          if (res.ok) {
+            showAccountsAlert(res.message || "Connection verified successfully!", "success");
+          } else {
+            showAccountsAlert(res.error || "Verification failed.", "error");
+          }
+          await loadEmailAccounts();
+        } catch (err) {
+          showAccountsAlert(`Test failed: ${err.message}`, "error");
+        } finally {
+          btn.textContent = "Test Connection";
+          btn.disabled = false;
+        }
+      };
+    });
 
     $$(".disconnect-btn").forEach((btn) => {
       btn.onclick = async () => {

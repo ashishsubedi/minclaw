@@ -23,7 +23,7 @@ public class Transcriber {
         } else if let envModel = ProcessInfo.processInfo.environment["WHISPER_MODEL"], !envModel.isEmpty {
             self.model = envModel
         } else {
-            self.model = "mlx-community/whisper-small-4bit"
+            self.model = "mlx-community/whisper-small-mlx-4bit"
         }
     }
 

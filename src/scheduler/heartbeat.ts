@@ -34,26 +34,42 @@ export function startHeartbeat(onBeat: HeartbeatCallback): void {
     }
 
     isRunning = true;
-    const nowIso = new Date().toISOString();
-    console.log(`[heartbeat] Beat at ${nowIso}`);
+    let timeoutId: any;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error("Heartbeat timed out after 240000ms"));
+      }, 240_000);
+      timeoutId?.unref?.();
+    });
 
     try {
-      // 1. Run zero-token reflex check
-      const reflex = await runReflexCheck();
+      await Promise.race([
+        (async () => {
+          const nowIso = new Date().toISOString();
+          console.log(`[heartbeat] Beat at ${nowIso}`);
 
-      if (!reflex.hasDelta) {
-        console.log("[heartbeat] Reflex check: idle (no actionable state changes). Skipping LLM call.");
-        return;
-      }
+          // 1. Run zero-token reflex check with deferred commits
+          const reflex = await runReflexCheck({ deferCommit: true });
 
-      console.log(`[heartbeat] Reflex check: state change detected (${reflex.items.length} items). Invoking agent...`);
-      const basePrompt = await loadHeartbeatPrompt();
-      const enrichedPrompt = `${basePrompt}\n\n## Actionable Reflex Triggers\n${reflex.summary}\n\nTriage these triggers: execute tasks, update Logseq status, or message the user via Telegram if urgent.`;
+          if (!reflex.hasDelta) {
+            console.log("[heartbeat] Reflex check: idle (no actionable state changes). Skipping LLM call.");
+            return;
+          }
 
-      await onBeat(enrichedPrompt);
+          console.log(`[heartbeat] Reflex check: state change detected (${reflex.items.length} items). Invoking agent...`);
+          const basePrompt = await loadHeartbeatPrompt();
+          const enrichedPrompt = `${basePrompt}\n\n## Actionable Reflex Triggers\n${reflex.summary}\n\nTriage these triggers: execute tasks, update Logseq status, or message the user via Telegram if urgent.`;
+
+          await onBeat(enrichedPrompt);
+          reflex.commit?.();
+          console.log("[heartbeat] Reflex state committed successfully.");
+        })(),
+        timeoutPromise,
+      ]);
     } catch (err) {
       console.error(`[heartbeat] Error: ${err}`);
     } finally {
+      clearTimeout(timeoutId);
       isRunning = false;
     }
   });

@@ -150,25 +150,32 @@ public struct HistoryPanelView: View {
 struct PulsingStatusOrb: View {
     let state: VoiceState
 
+    @ViewBuilder
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let pulse = CGFloat((sin(time * 3.0) + 1.0) / 2.0)
-            let color = statusColor
+        if state == .idle {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 8, height: 8)
+                .shadow(color: statusColor.opacity(0.2), radius: 2)
+                .frame(width: 14, height: 14)
+        } else {
+            TimelineView(.animation) { timeline in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let pulse = CGFloat((sin(time * 3.0) + 1.0) / 2.0)
+                let color = statusColor
 
-            ZStack {
-                if state != .idle {
+                ZStack {
                     Circle()
                         .stroke(color.opacity(Double(0.45 - pulse * 0.35)), lineWidth: 1.5)
                         .scaleEffect(CGFloat(1.0 + pulse * 0.6))
-                }
 
-                Circle()
-                    .fill(color)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: color.opacity(state == .idle ? 0.2 : 0.8), radius: state == .idle ? 2 : 6)
+                    Circle()
+                        .fill(color)
+                        .frame(width: 8, height: 8)
+                        .shadow(color: color.opacity(0.8), radius: 6)
+                }
+                .frame(width: 14, height: 14)
             }
-            .frame(width: 14, height: 14)
         }
     }
 
@@ -371,25 +378,18 @@ struct AssistantBubble: View {
 // Twinkling Iridescent Sparkle Icon
 struct TwinklingSparkle: View {
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            let pulse = CGFloat((sin(time * 3.5) + 1.0) / 2.0)
-            let scale = CGFloat(0.95 + pulse * 0.18)
-
-            Image(systemName: "sparkles")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 0.85, green: 0.45, blue: 1.0),
-                            Color(red: 0.45, green: 0.75, blue: 1.0)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+        Image(systemName: "sparkles")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.85, green: 0.45, blue: 1.0),
+                        Color(red: 0.45, green: 0.75, blue: 1.0)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
-                .scaleEffect(scale)
-                .shadow(color: Color.purple.opacity(Double(0.4 + pulse * 0.4)), radius: 6)
-        }
+            )
+            .shadow(color: Color.purple.opacity(0.5), radius: 4)
     }
 }

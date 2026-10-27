@@ -12,7 +12,7 @@
   },
   stt: {
     engine: 'mlx_whisper',
-    model: 'mlx-community/whisper-small-4bit',
+    model: 'mlx-community/whisper-small-mlx-4bit',
     language: 'en',
     path: '~/.venv-vllm-metal/bin/mlx_whisper',
   },

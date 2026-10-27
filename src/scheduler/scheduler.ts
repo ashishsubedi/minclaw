@@ -18,17 +18,34 @@ export type ScheduledJob = {
   channel: string;
   sender: string;
   oneShot: boolean;
+  mode?: "reminder" | "agent";
   createdAt: number;
   nextRunAt?: number;
   lastRunAt?: number;
 };
 
+export function isAgenticJob(job: ScheduledJob): boolean {
+  if (job.mode === "agent") return true;
+  if (job.mode === "reminder") return false;
+  return (
+    !job.oneShot ||
+    /\b(search|find|research|digest|summarize|summary|check|scan|review|report|fetch|news|papers|briefing)\b/i.test(
+      job.message
+    )
+  );
+}
+
 type JobCallback = (job: ScheduledJob) => void;
 
-const JOBS_FILE = resolve(import.meta.dir, "../../sessions/scheduled-jobs.json");
+let JOBS_FILE = resolve(import.meta.dir, "../../sessions/scheduled-jobs.json");
 const activeJobs = new Map<string, Cron>();
 let jobStore: ScheduledJob[] = [];
 let onFireCallback: JobCallback | null = null;
+
+export function setJobsFileForTest(filePath?: string): void {
+  JOBS_FILE = filePath || resolve(import.meta.dir, "../../sessions/scheduled-jobs.json");
+  jobStore = loadJobs();
+}
 
 export function setJobCallback(cb: JobCallback): void {
   onFireCallback = cb;
@@ -101,6 +118,14 @@ export function removeJob(id: string): boolean {
   jobStore = jobStore.filter((j) => j.id !== id);
   saveJobs();
   return jobStore.length < before;
+}
+
+export function updateJobMode(id: string, mode?: "reminder" | "agent"): ScheduledJob | null {
+  const job = jobStore.find((j) => j.id === id);
+  if (!job) return null;
+  job.mode = mode;
+  saveJobs();
+  return job;
 }
 
 export function listJobs(): ScheduledJob[] {
