@@ -32,6 +32,18 @@ import {
 import { syncHimalayaConfig } from "../email/imap.ts";
 import { listAllUnreadEmails } from "../email/service.ts";
 import type { EmailAccount } from "../email/types.ts";
+import {
+  isScreenLocked,
+  isTouchIdAvailable,
+  verifyTouchId,
+  verifyPassword,
+  createSession,
+  validateSession,
+  revokeSession,
+  extractSessionToken,
+  createSessionCookieHeader,
+  clearSessionCookieHeader,
+} from "../auth/touchid.ts";
 
 const HOST = "127.0.0.1";
 const PORT = Number.parseInt(process.env.NAKEDCLAW_WEB_PORT || "8787", 10);
@@ -64,13 +76,27 @@ function contentTypeFor(pathname: string): string {
   }
 }
 
-function json(data: unknown, status = 200): Response {
+function json(data: unknown, status = 200, extraHeaders: HeadersInit = {}): Response {
+  const headers = new Headers({
+    "content-type": "application/json; charset=utf-8",
+    "cache-control": "no-store",
+  });
+  if (extraHeaders) {
+    if (extraHeaders instanceof Headers) {
+      extraHeaders.forEach((val, key) => headers.set(key, val));
+    } else if (Array.isArray(extraHeaders)) {
+      for (const [key, val] of extraHeaders) {
+        headers.set(key, val);
+      }
+    } else {
+      for (const [key, val] of Object.entries(extraHeaders)) {
+        headers.set(key, val);
+      }
+    }
+  }
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
+    headers,
   });
 }
 
@@ -121,7 +147,7 @@ export function verifyCsrfAndOrigin(
   }
 
   // 2. Allow OAuth callbacks like /api/auth/google/callback
-  if (url.pathname === "/api/auth/google/callback" || url.pathname.startsWith("/api/auth/")) {
+  if (url.pathname === "/api/auth/google/callback") {
     return { ok: true };
   }
 
@@ -631,6 +657,100 @@ async function handleApi(req: Request, url: URL): Promise<Response> {
   return text("Not found", 404);
 }
 
+export async function handleRequest(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+
+  if (url.pathname.startsWith("/api/")) {
+    const verifyResult = verifyCsrfAndOrigin(req, url);
+    if (!verifyResult.ok) {
+      return json({ error: verifyResult.error }, verifyResult.status || 403);
+    }
+
+    // Ungated auth endpoints:
+    if (req.method === "GET" && url.pathname === "/api/auth/status") {
+      const token = extractSessionToken(req);
+      const authenticated = validateSession(token);
+      const locked = isScreenLocked();
+      const touchIdAvailable = isTouchIdAvailable();
+      return json({ authenticated, locked, touchIdAvailable });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/touchid") {
+      if (isScreenLocked()) {
+        return json({ ok: false, error: "macOS screen is locked" }, 401);
+      }
+      const success = await verifyTouchId();
+      if (success) {
+        const token = createSession();
+        return json({ ok: true }, 200, {
+          "Set-Cookie": createSessionCookieHeader(token),
+        });
+      }
+      return json({ ok: false, error: "Touch ID verification failed or cancelled" }, 401);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/password") {
+      if (isScreenLocked()) {
+        return json({ ok: false, error: "macOS screen is locked" }, 401);
+      }
+      let password = "";
+      try {
+        const body = (await req.json()) as { password?: string };
+        if (typeof body?.password === "string") {
+          password = body.password;
+        }
+      } catch {
+        return json({ ok: false, error: "Invalid JSON body" }, 400);
+      }
+
+      if (verifyPassword(password)) {
+        const token = createSession();
+        return json({ ok: true }, 200, {
+          "Set-Cookie": createSessionCookieHeader(token),
+        });
+      }
+      return json({ ok: false, error: "Invalid password" }, 401);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/lock") {
+      const token = extractSessionToken(req);
+      if (token) {
+        revokeSession(token);
+      }
+      return json({ ok: true }, 200, {
+        "Set-Cookie": clearSessionCookieHeader(),
+      });
+    }
+
+    if (url.pathname === "/api/auth/google/callback") {
+      try {
+        return await handleApi(req, url);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return json({ error: message }, 500);
+      }
+    }
+
+    // Gate ALL other /api/* endpoints:
+    const token = extractSessionToken(req);
+    if (!validateSession(token)) {
+      return json(
+        { error: "Authentication required", locked: isScreenLocked() },
+        401
+      );
+    }
+
+    try {
+      return await handleApi(req, url);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return json({ error: message }, 500);
+    }
+  }
+
+  return await serveStatic(url.pathname);
+}
+
 export function startWebServer(startPort = PORT): Bun.Server<undefined> {
   let lastError: unknown;
 
@@ -639,24 +759,8 @@ export function startWebServer(startPort = PORT): Bun.Server<undefined> {
       const server = Bun.serve({
         hostname: HOST,
         port: candidate,
-        async fetch(req) {
-          const url = new URL(req.url);
-
-          if (url.pathname.startsWith("/api/")) {
-            const verifyResult = verifyCsrfAndOrigin(req, url);
-            if (!verifyResult.ok) {
-              return json({ error: verifyResult.error }, verifyResult.status || 403);
-            }
-
-            try {
-              return await handleApi(req, url);
-            } catch (err) {
-              const message = err instanceof Error ? err.message : String(err);
-              return json({ error: message }, 500);
-            }
-          }
-
-          return await serveStatic(url.pathname);
+        fetch(req) {
+          return handleRequest(req);
         },
       });
 

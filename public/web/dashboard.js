@@ -42,6 +42,9 @@
       const res = await fetch(url, { ...options, headers });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 401 && !url.startsWith("/api/auth/")) {
+          showLockOverlay("Authentication required or session expired");
+        }
         throw new Error(data.error || `HTTP ${res.status}`);
       }
       return data;
@@ -1485,6 +1488,188 @@
   }
   window.triggerWhatsAppPair = triggerWhatsAppPair;
 
+  // ================= Lock Screen & Auth State =================
+  let isLockedManually = false;
+  let isAuthenticating = false;
+  let isOverlayVisible = false;
+
+  function showLockOverlay(errorMsg = "") {
+    const overlay = $("#lockOverlay");
+    if (!overlay) return;
+    overlay.classList.remove("hidden");
+    isOverlayVisible = true;
+
+    const errBox = $("#lockError");
+    if (errBox) {
+      if (errorMsg) {
+        errBox.textContent = errorMsg;
+        errBox.classList.remove("hidden");
+      } else {
+        errBox.textContent = "";
+        errBox.classList.add("hidden");
+      }
+    }
+
+    const passInput = $("#passwordInput");
+    if (passInput) {
+      passInput.value = "";
+      setTimeout(() => passInput.focus(), 100);
+    }
+  }
+
+  function hideLockOverlay() {
+    const overlay = $("#lockOverlay");
+    if (!overlay) return;
+    overlay.classList.add("hidden");
+    isOverlayVisible = false;
+
+    const errBox = $("#lockError");
+    if (errBox) {
+      errBox.textContent = "";
+      errBox.classList.add("hidden");
+    }
+  }
+
+  async function checkAuthStatus(triggerTouchIdOnLocked = true) {
+    try {
+      const res = await fetch("/api/auth/status");
+      const data = await res.json();
+      if (data.authenticated) {
+        hideLockOverlay();
+        isLockedManually = false;
+        return true;
+      } else {
+        showLockOverlay();
+        if (data.touchIdAvailable && !isLockedManually && triggerTouchIdOnLocked) {
+          unlockWithTouchId();
+        }
+        return false;
+      }
+    } catch (err) {
+      console.warn("Error checking auth status:", err);
+      showLockOverlay();
+      return false;
+    }
+  }
+
+  async function unlockWithTouchId() {
+    if (isAuthenticating) return;
+    isAuthenticating = true;
+
+    const touchBtn = $("#touchIdBtn");
+    const originalText = touchBtn ? touchBtn.innerHTML : "";
+    if (touchBtn) {
+      touchBtn.disabled = true;
+      touchBtn.innerHTML = `<span>Scanning Touch ID...</span>`;
+    }
+
+    const errBox = $("#lockError");
+    if (errBox) errBox.classList.add("hidden");
+
+    try {
+      const res = await fetch("/api/auth/touchid", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        hideLockOverlay();
+        isLockedManually = false;
+        showToast("Authenticated with Touch ID", "success");
+        await Promise.all([loadOverview(), loadSessions(), loadEmailAccounts()]);
+      } else {
+        showLockOverlay(data.error || "Touch ID verification failed or cancelled");
+      }
+    } catch (err) {
+      showLockOverlay("Touch ID verification failed");
+    } finally {
+      if (touchBtn) {
+        touchBtn.disabled = false;
+        touchBtn.innerHTML = originalText;
+      }
+      isAuthenticating = false;
+    }
+  }
+
+  async function submitPasswordUnlock(event) {
+    if (event) event.preventDefault();
+    if (isAuthenticating) return;
+
+    const passInput = $("#passwordInput");
+    const password = passInput ? passInput.value : "";
+    const passBtn = $("#passwordBtn");
+    const originalText = passBtn ? passBtn.textContent : "";
+
+    isAuthenticating = true;
+    if (passBtn) {
+      passBtn.disabled = true;
+      passBtn.textContent = "Verifying...";
+    }
+
+    const errBox = $("#lockError");
+    if (errBox) errBox.classList.add("hidden");
+
+    try {
+      const res = await fetch("/api/auth/password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        hideLockOverlay();
+        isLockedManually = false;
+        showToast("Dashboard unlocked", "success");
+        await Promise.all([loadOverview(), loadSessions(), loadEmailAccounts()]);
+      } else {
+        showLockOverlay(data.error || "Invalid password");
+      }
+    } catch (err) {
+      showLockOverlay("Failed to verify password");
+    } finally {
+      if (passBtn) {
+        passBtn.disabled = false;
+        passBtn.textContent = originalText;
+      }
+      isAuthenticating = false;
+    }
+  }
+
+  async function lockDashboard() {
+    isLockedManually = true;
+    try {
+      await fetch("/api/auth/lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (err) {
+      console.warn("Error locking dashboard:", err);
+    }
+    showLockOverlay();
+    showToast("Dashboard locked", "info");
+  }
+
+  function initAuthUI() {
+    const lockBtn = $("#lockBtn");
+    if (lockBtn) {
+      lockBtn.addEventListener("click", lockDashboard);
+    }
+
+    const touchBtn = $("#touchIdBtn");
+    if (touchBtn) {
+      touchBtn.addEventListener("click", unlockWithTouchId);
+    }
+
+    const passForm = $("#passwordForm");
+    if (passForm) {
+      passForm.addEventListener("submit", submitPasswordUnlock);
+    }
+
+    window.submitPasswordUnlock = submitPasswordUnlock;
+    window.unlockWithTouchId = unlockWithTouchId;
+    window.lockDashboard = lockDashboard;
+  }
+
   // Refresh Button
   const refreshBtn = $("#refreshBtn");
   if (refreshBtn) {
@@ -1498,13 +1683,13 @@
     });
   }
 
-  // Periodic Polling (5s interval, paused when document is hidden)
+  // Periodic Polling (5s interval, paused when document is hidden or dashboard is locked)
   function initPolling() {
     setInterval(() => {
-      if (document.hidden) return;
-      loadOverview();
+      if (document.hidden || isOverlayVisible) return;
+      loadOverview().catch(() => {});
       if (state.activeTab === "sessions") {
-        loadSessions();
+        loadSessions().catch(() => {});
       }
     }, 5000);
   }
@@ -1512,6 +1697,7 @@
   // Initialization
   async function init() {
     initRouting();
+    initAuthUI();
 
     // Setup chat input keyboard listeners & auto-resize
     const chatInput = $("#chatInput");
@@ -1527,7 +1713,10 @@
       });
     }
 
-    await Promise.all([loadOverview(), loadSessions(), loadEmailAccounts()]);
+    const authenticated = await checkAuthStatus(true);
+    if (authenticated) {
+      await Promise.all([loadOverview(), loadSessions(), loadEmailAccounts()]);
+    }
     initPolling();
   }
 

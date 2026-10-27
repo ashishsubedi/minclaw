@@ -140,6 +140,9 @@
             </span>
           </div>
 
+          <button id="lockBtn" class="btn btn-sm">
+            🔒 Lock
+          </button>
           <button id="refreshBtn" class="btn btn-sm">
             ↻ Refresh
           </button>
@@ -700,6 +703,49 @@
           <button type="button" class="btn" onclick="closeTelegramModal()">Cancel</button>
           <button type="submit" class="btn btn-primary">Verify & Save Bot</button>
         </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ================= LOCK OVERLAY ================= -->
+  <div id="lockOverlay" class="lock-overlay hidden">
+    <div class="lock-card">
+      <div class="lock-badge-wrap">
+        <div class="lock-logo-badge">
+          <img src="/minclaw.svg" alt="MinClaw Logo" class="lock-logo" />
+          <span class="lock-badge-icon">🔒</span>
+        </div>
+      </div>
+      <h2 class="lock-title">MinClaw Dashboard Locked</h2>
+      <p class="lock-subtitle">Authenticate with Touch ID or Master Password</p>
+
+      <div id="touchIdSection" class="lock-section">
+        <button id="touchIdBtn" type="button" class="btn-touchid">
+          <svg class="touchid-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 11a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 004 11m0 0a8.003 8.003 0 0015.357 2m-8.357 5v3" />
+          </svg>
+          <span>Unlock with Touch ID</span>
+        </button>
+      </div>
+
+      <div class="lock-divider">
+        <span>or</span>
+      </div>
+
+      <form id="passwordForm" class="lock-form" onsubmit="submitPasswordUnlock(event)">
+        <div class="lock-input-group">
+          <input
+            id="passwordInput"
+            type="password"
+            class="input-text lock-password-input"
+            placeholder="Enter password..."
+            autocomplete="current-password"
+          />
+          <button id="passwordBtn" type="submit" class="btn btn-secondary w-full" style="width: 100%;">
+            Unlock with Password
+          </button>
+        </div>
+        <div id="lockError" class="lock-error hidden"></div>
       </form>
     </div>
   </div>

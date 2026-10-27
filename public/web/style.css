@@ -789,3 +789,188 @@ html, body {
   max-height: 200px;
   overflow-y: auto;
 }
+
+/* ================= LOCK OVERLAY ================= */
+.lock-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(10, 12, 16, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+  opacity: 1;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.lock-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.lock-card {
+  width: 90%;
+  max-width: 400px;
+  background: rgba(27, 31, 39, 0.88);
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  padding: 32px 28px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7), 0 0 1px rgba(255, 255, 255, 0.2);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.lock-badge-wrap {
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.lock-logo-badge {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.lock-logo {
+  width: 40px;
+  height: 40px;
+}
+
+.lock-badge-icon {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  font-size: 14px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.lock-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.3px;
+  margin-bottom: 6px;
+}
+
+.lock-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+  line-height: 1.4;
+}
+
+.lock-section {
+  width: 100%;
+  margin-bottom: 16px;
+}
+
+.btn-touchid {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 11px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 10px;
+  background-color: var(--accent-blue);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s ease, transform 0.1s ease;
+}
+
+.btn-touchid:hover {
+  background-color: var(--accent-blue-hover);
+}
+
+.btn-touchid:active {
+  transform: scale(0.98);
+}
+
+.touchid-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.lock-divider {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin: 4px 0 16px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.lock-divider::before,
+.lock-divider::after {
+  content: "";
+  flex: 1;
+  border-bottom: 1px solid var(--border);
+}
+
+.lock-divider span {
+  padding: 0 10px;
+}
+
+.lock-form {
+  width: 100%;
+}
+
+.lock-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.lock-password-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 13px;
+  border-radius: 8px;
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-strong);
+  color: var(--text-main);
+  outline: none;
+}
+
+.lock-password-input:focus {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px var(--accent-blue-soft);
+}
+
+.lock-error {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background-color: var(--color-red-soft);
+  border: 1px solid var(--color-red);
+  color: #ff6b6b;
+  font-size: 12px;
+  text-align: left;
+}
+
