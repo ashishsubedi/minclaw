@@ -405,16 +405,28 @@ Operating Directives:
    - Read full email by ID: bun run src/cli.ts tool call email action=read id="<id>" account="<account>"
    - Send email: bun run src/cli.ts tool call email action=send to="..." subject="..." body="..."
    - Upcoming calendar events: bun run src/cli.ts tool call calendar action=list_events limit=10
+   - Create calendar event: bun run src/cli.ts tool call calendar action=create_event summary="..." startTime="..."
    - Play YouTube video in Firefox: bun run src/cli.ts tool call youtube action=play query="<song or video>" browser="Firefox"
    - Search YouTube fast: bun run src/cli.ts tool call youtube action=search query="<query>"
    - Reset session: bun run src/cli.ts tool call session_reset
    - Save permanent memory: bun run src/cli.ts tool call remember note="<fact>"
    - Search chat memory: bun run src/cli.ts tool call search_memory query="<keyword>"
    - Schedule reminder: bun run src/cli.ts tool call schedule_reminder when="<time>" message="<text>"
-3. Workspace Context: You are running inside the MinClaw workspace.
-4. Skip Logseq Memory: Unless explicitly requested by the user or strictly critical to the task, skip Logseq memory operations (do not query Logseq tasks/graphs or sync journal pulses). This session is for user's everyday random tasks, not autonomous AI development lifecycle tracking.
-5. Process Safety & Self-Improvement: When improving MinClaw source files or fixing tool bugs, NEVER execute \`minclaw restart\`, \`bun run src/cli.ts restart\`, \`minclaw stop\`, or kill the MinClaw daemon. MinClaw is your parent host process; restarting it will kill your turn mid-flight, drop the user's connection, and leave the daemon stopped. Always complete the user's request in the current turn and inform the user if a daemon restart is needed to reload updated code.
-6. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.`;
+   - Queue self-improvement: bun run src/cli.ts tool call queue_self_improvement title="..." description="..."
+3. Strict Autonomous Step Budget (5 + 5 Hard Stop):
+   - You have a strict budget of at most 5 tool calls for this request.
+   - If absolutely necessary, you may use up to 5 additional tool calls (hard maximum 10 tools total).
+   - Under NO circumstance exceed 10 tool calls. At or before 10 tool steps, STOP calling tools and deliver your final synthesized response to the user.
+4. Live Turn Decoupled Self-Improvement:
+   - When responding to user interaction, DO NOT read or edit \`src/\` codebase files or run \`bun test\`.
+   - Focus 100% on fulfilling the user's immediate request with available tools.
+   - If a tool capability is missing, queue it for background execution via:
+     \`bun run src/cli.ts tool call queue_self_improvement title="..." description="..."\`
+     and solve the user's immediate request directly.
+5. Workspace Context: You are running inside the MinClaw workspace.
+6. Skip Logseq Memory: Unless explicitly requested by the user or strictly critical to the task, skip Logseq memory operations (do not query Logseq tasks/graphs or sync journal pulses). This session is for user's everyday random tasks, not autonomous AI development lifecycle tracking.
+7. Process Safety & Self-Improvement: NEVER execute \`minclaw restart\`, \`bun run src/cli.ts restart\`, \`minclaw stop\`, or kill the MinClaw daemon. MinClaw is your parent host process; restarting it will kill your turn mid-flight, drop the user's connection, and leave the daemon stopped.
+8. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.`;
 
 export function filterSystemPromptForAgy(systemPrompt: string): string {
   if (!systemPrompt || !systemPrompt.trim()) return "";
@@ -593,6 +605,11 @@ export async function callModelWithFallback(
             let textRes = "";
             let agyError: string | undefined;
             let agyUsage: any = undefined;
+            let agyToolStepCount = 0;
+            const AGY_FIRST_PHASE_CAP = 5;
+            const AGY_HARD_STOP_LIMIT = 10;
+            let progressUpdateSent = false;
+            let hardStopTriggered = false;
 
             const reader = proc.stdout.getReader();
             const decoder = new TextDecoder();
@@ -629,6 +646,19 @@ export async function callModelWithFallback(
                   const params = step.tool_info?.parameters;
 
                   if (step.state === "ACTIVE") {
+                    if (agyToolStepCount >= AGY_HARD_STOP_LIMIT) {
+                      if (!hardStopTriggered) {
+                        hardStopTriggered = true;
+                        console.warn(`${logPrefix} 🛑 Hard stop reached (${AGY_HARD_STOP_LIMIT} tools). Terminating agy execution.`);
+                        try {
+                          proc.kill("SIGTERM");
+                        } catch (err: any) {
+                          debugLog(`Failed to terminate proc on hard stop: ${err.message}`);
+                        }
+                      }
+                      return;
+                    }
+
                     let displayToolName = toolName;
                     if (toolName === "call_mcp_tool" && params?.ToolName) {
                       displayToolName = `mcp:${params.ToolName}`;
@@ -648,6 +678,7 @@ export async function callModelWithFallback(
                       }
                     }
                   } else if (step.state === "DONE") {
+                    agyToolStepCount++;
                     const dur = typeof step.duration_seconds === "number"
                       ? ` (${step.duration_seconds.toFixed(1)}s)`
                       : "";
@@ -660,6 +691,26 @@ export async function callModelWithFallback(
                       input: params ?? {},
                       output: budgetToolOutput(outText),
                     });
+
+                    if (agyToolStepCount === AGY_FIRST_PHASE_CAP && !progressUpdateSent) {
+                      progressUpdateSent = true;
+                      console.log(`${logPrefix} ⏱️ Progress checkpoint: 5 tool steps completed. Allowing up to 5 additional steps.`);
+                      if (status) {
+                        try {
+                          await status("Progress update: 5 steps completed. Continuing with up to 5 additional steps...");
+                        } catch (e: any) {
+                          debugLog(`status callback error: ${e.message}`);
+                        }
+                      }
+                    } else if (agyToolStepCount >= AGY_HARD_STOP_LIMIT && !hardStopTriggered) {
+                      hardStopTriggered = true;
+                      console.warn(`${logPrefix} 🛑 Hard stop reached (${AGY_HARD_STOP_LIMIT} tools). Terminating agy execution.`);
+                      try {
+                        proc.kill("SIGTERM");
+                      } catch (err: any) {
+                        debugLog(`Failed to terminate proc on hard stop: ${err.message}`);
+                      }
+                    }
                   }
                 } else if (step.step_type === "agent_response") {
                   if (step.state === "DONE" && step.usage?.thinking_tokens) {
@@ -741,11 +792,20 @@ export async function callModelWithFallback(
             const stderr = (await stderrPromise).trim();
             const code = await proc.exited;
 
-            if (agyError) {
-              throw new Error(agyError);
-            }
-            if (code !== 0) {
-              throw new Error(`agy CLI exited with code ${code}: ${stderr || textRes || "Unknown error"}`);
+            if (hardStopTriggered) {
+              if (!textRes) {
+                textRes =
+                  `[Autonomous Step Cap Reached - 10 Steps]\nI completed 10 tool operations:\n` +
+                  capturedToolCalls.map((c) => `- ${c.name}`).join("\n") +
+                  `\n\nI have reached the maximum autonomous step budget. The preliminary operations have been executed as summarized above.`;
+              }
+            } else {
+              if (agyError) {
+                throw new Error(agyError);
+              }
+              if (code !== 0) {
+                throw new Error(`agy CLI exited with code ${code}: ${stderr || textRes || "Unknown error"}`);
+              }
             }
 
             // Check emergency hard ceiling watermark:
@@ -1023,9 +1083,25 @@ export async function runAgent(
     clearPendingConfirmation(sessionKey);
   }
 
-  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+  const FIRST_PHASE_CAP = 5;
+  const HARD_STOP_CAP = Math.min(config.sessions.maxToolIterations ?? 10, 10);
+  let progressUpdateSent = false;
+
+  for (let i = 0; i < HARD_STOP_CAP; i++) {
     if (i > 0) {
-      console.log(`${logPrefix} ── Turn iteration ${i + 1}/${MAX_TOOL_ITERATIONS} ──`);
+      console.log(`${logPrefix} ── Turn iteration ${i + 1}/${HARD_STOP_CAP} ──`);
+    }
+
+    if (i === FIRST_PHASE_CAP && !progressUpdateSent) {
+      progressUpdateSent = true;
+      console.log(`${logPrefix} ⏱️ Progress checkpoint: 5 tool iterations completed. Continuing with up to 5 additional iterations.`);
+      if (status) {
+        try {
+          await status("Progress update: 5 steps completed. Continuing with up to 5 additional steps...");
+        } catch (e: any) {
+          debugLog(`status callback error: ${e.message}`);
+        }
+      }
     }
 
     const { response: res, successfulConfig, agyToolCalls } = await callModelWithFallback(
@@ -1172,7 +1248,42 @@ export async function runAgent(
   if (sessionKey && lastUsage?.input) {
     void maybeAutoCompactSession(sessionKey, { lastInputTokens: lastUsage.input });
   }
-  return { text: "(max tool iterations reached)", toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
+
+  console.warn(`${logPrefix} 🛑 Hard stop reached (${HARD_STOP_CAP} iterations). Forcing final synthesized response.`);
+  messages.push({
+    role: "user",
+    content: "Hard stop reached (10 tool iterations). You have reached the maximum allowed tool operations for this turn. Do NOT call any more tools. Provide your final concise synthesized response now summarizing your results. If answer is incomplete, clearly indicate what is missing and why.",
+    timestamp: Date.now(),
+  });
+
+  try {
+    const finalCall = await callModelWithFallback(
+      resolvedModels,
+      { systemPrompt, messages, tools: [] },
+      { maxTokens: 4096 },
+      sessionKey,
+      status
+    );
+    if (finalCall.response.role === "assistant") {
+      const text = Array.isArray(finalCall.response.content)
+        ? finalCall.response.content
+            .filter((b) => b.type === "text")
+            .map((b) => ("text" in b ? b.text : ""))
+            .join("\n")
+        : String(finalCall.response.content);
+      if (text.trim()) {
+        return { text: text.trim(), toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined, usage: lastUsage };
+      }
+    }
+  } catch (err: any) {
+    debugLog(`Final synthesis call failed: ${err.message}`);
+  }
+
+  return {
+    text: `[Autonomous Step Cap Reached - 10 Iterations]\nCompleted ${toolCallLog.length} tool operations. Execution stopped at the 10-step hard cap.`,
+    toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
+    usage: lastUsage,
+  };
 }
 
 async function buildSystemPrompt(workspace: string, memoryContext: string, sessionKey?: string): Promise<string> {

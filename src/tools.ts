@@ -10,7 +10,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } fr
 import { getChannelSender, detectMediaType, getRegisteredChannels } from "./channels/registry.ts";
 import { addJob, parseTimeToJob } from "./scheduler/scheduler.ts";
 import { listAllUnreadEmails, sendEmail, readEmailMessage } from "./email/service.ts";
-import { listAllUpcomingEvents, getLastCalendarError } from "./email/calendar.ts";
+import { listAllUpcomingEvents, createCalendarEvent, getLastCalendarError } from "./email/calendar.ts";
 import {
   registerToolExtension,
   getToolExtension,
@@ -23,6 +23,7 @@ import {
 export type ToolContext = {
   channel: string;
   sender: string;
+  sessionKey?: string;
   reply?: (text: string) => Promise<void>;
 };
 
@@ -244,16 +245,23 @@ export const emailTool: Tool<typeof EmailParams> = {
 
 const CalendarParams = Type.Object({
   action: Type.String({
-    description: "Action to perform: 'list_events' to see schedule and upcoming meetings",
+    description: "Action to perform: 'list_events' to see schedule and upcoming meetings, 'create_event' (or 'add_event') to schedule a new event",
   }),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of upcoming events to return (default 5)" })),
+  limit: Type.Optional(Type.Number({ description: "Maximum number of upcoming events to return for list_events (default 5)" })),
+  summary: Type.Optional(Type.String({ description: "Event title / summary (required for create_event)" })),
+  startTime: Type.Optional(Type.String({ description: "Event start time (ISO 8601 string, 'YYYY-MM-DD HH:mm', or time string like '11:30' / '11:30 AM')" })),
+  endTime: Type.Optional(Type.String({ description: "Event end time (optional; defaults to 1 hour after start time)" })),
+  location: Type.Optional(Type.String({ description: "Event location or venue (optional)" })),
+  description: Type.Optional(Type.String({ description: "Event description or notes (optional)" })),
+  account: Type.Optional(Type.String({ description: "Optional specific Google account email to schedule under" })),
 });
 
 export const calendarTool: Tool<typeof CalendarParams> = {
   name: "calendar",
   description:
-    "Check upcoming Google Calendar events and meetings. " +
-    "Use action='list_events' to see schedule, meeting titles, start/end times, and Google Meet video links.",
+    "Check upcoming Google Calendar events or create new ones. " +
+    "Use action='list_events' to view upcoming meetings and video links. " +
+    "Use action='create_event' with summary and startTime (and optional endTime, location, description) to add an event to Google Calendar.",
   parameters: CalendarParams,
 };
 
@@ -323,6 +331,32 @@ export const sessionResetTool: Tool<typeof SessionResetParams> = {
   parameters: SessionResetParams,
 };
 
+const QueueSelfImprovementParams = Type.Object({
+  title: Type.String({ description: "Short descriptive title of the improvement, feature gap, or bug to fix." }),
+  description: Type.String({ description: "Details of what needs to be changed/implemented, relevant files, and expected behavior." }),
+  toolName: Type.Optional(Type.String({ description: "Target tool or subsystem (e.g. 'calendar', 'email', 'voice', 'daemon')." })),
+});
+
+export const queueSelfImprovementTool: Tool<typeof QueueSelfImprovementParams> = {
+  name: "queue_self_improvement",
+  description:
+    "Queue a self-improvement task, codebase bugfix, or feature enhancement for offline background execution. " +
+    "NEVER inspect src/ or edit code during live conversational turns — queue the enhancement here and fulfill the user request immediately with available tools.",
+  parameters: QueueSelfImprovementParams,
+};
+
+const UpdateSelfImprovementParams = Type.Object({
+  id: Type.String({ description: "ID of the self-improvement task (e.g. 'si-1730000000-abcde')." }),
+  status: Type.String({ description: "Status to set: 'completed', 'failed', or 'in_progress'." }),
+  notes: Type.Optional(Type.String({ description: "Optional notes or summary of the changes made." })),
+});
+
+export const updateSelfImprovementTool: Tool<typeof UpdateSelfImprovementParams> = {
+  name: "update_self_improvement",
+  description: "Update the status of a queued self-improvement task (typically called during background heartbeat execution).",
+  parameters: UpdateSelfImprovementParams,
+};
+
 export const allTools: Tool[] = [
   shellTool,
   readFileTool,
@@ -339,6 +373,8 @@ export const allTools: Tool[] = [
   compactSessionTool,
   youtubeTool,
   sessionResetTool,
+  queueSelfImprovementTool,
+  updateSelfImprovementTool,
 ];
 
 // ── Tool execution ────────────────────────────────────────────────
@@ -1113,6 +1149,42 @@ async function executeEmail(args: Static<typeof EmailParams>): Promise<ToolResul
 }
 
 async function executeCalendar(args: Static<typeof CalendarParams>): Promise<ToolResult> {
+  const action = (args.action || "list_events").toLowerCase().trim();
+
+  if (action === "create_event" || action === "add_event" || action === "create" || action === "add") {
+    if (!args.summary || !args.summary.trim()) {
+      return { content: text("Error: 'summary' (event title) is required for create_event."), isError: true };
+    }
+    if (!args.startTime || !args.startTime.trim()) {
+      return { content: text("Error: 'startTime' is required for create_event."), isError: true };
+    }
+    try {
+      const created = await createCalendarEvent({
+        summary: args.summary.trim(),
+        startTime: args.startTime.trim(),
+        endTime: args.endTime?.trim(),
+        location: args.location?.trim(),
+        description: args.description?.trim(),
+        accountEmail: args.account?.trim(),
+      });
+      const lines = [
+        `Event scheduled successfully: "${created.summary}"`,
+        `Time: ${created.startTime} - ${created.endTime}`,
+      ];
+      if (created.location) lines.push(`Location: ${created.location}`);
+      if (created.description) lines.push(`Description: ${created.description}`);
+      lines.push(`Account: ${created.accountEmail}`);
+      if (created.id) lines.push(`Event ID: ${created.id}`);
+      return { content: text(lines.join("\n")), isError: false };
+    } catch (err: any) {
+      const scopeErr = getLastCalendarError();
+      if (scopeErr) {
+        return { content: text(`Unable to create calendar event: ${scopeErr}`), isError: true };
+      }
+      return { content: text(`Calendar error: ${err.message || String(err)}`), isError: true };
+    }
+  }
+
   try {
     const events = await listAllUpcomingEvents(args.limit || 5);
     const scopeErr = getLastCalendarError();
@@ -1408,6 +1480,59 @@ export async function executeSessionReset(
   }
 }
 
+export async function executeQueueSelfImprovement(
+  args: Static<typeof QueueSelfImprovementParams>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  const { enqueueSelfImprovement } = await import("./self-improvement/queue.ts");
+  if (!args.title || !args.title.trim()) {
+    return { content: text("Error: 'title' is required to queue a self-improvement task."), isError: true };
+  }
+  if (!args.description || !args.description.trim()) {
+    return { content: text("Error: 'description' is required to queue a self-improvement task."), isError: true };
+  }
+  const task = enqueueSelfImprovement({
+    title: args.title.trim(),
+    description: args.description.trim(),
+    toolName: args.toolName?.trim(),
+    sourceSession: context?.sessionKey,
+  });
+  return {
+    content: text(
+      `Self-improvement task queued successfully.\n` +
+      `ID: ${task.id}\n` +
+      `Title: "${task.title}"\n` +
+      `Status: pending (will be executed offline by background agent)`
+    ),
+    isError: false,
+  };
+}
+
+export async function executeUpdateSelfImprovement(
+  args: Static<typeof UpdateSelfImprovementParams>
+): Promise<ToolResult> {
+  const { updateSelfImprovementStatus } = await import("./self-improvement/queue.ts");
+  const validStatuses = ["pending", "in_progress", "completed", "failed"];
+  const s = args.status?.toLowerCase().trim();
+  if (!validStatuses.includes(s)) {
+    return {
+      content: text(`Error: Invalid status '${args.status}'. Must be one of: ${validStatuses.join(", ")}`),
+      isError: true,
+    };
+  }
+  const ok = updateSelfImprovementStatus(args.id, s as any, args.notes);
+  if (!ok) {
+    return {
+      content: text(`Error: Self-improvement task not found with ID '${args.id}'`),
+      isError: true,
+    };
+  }
+  return {
+    content: text(`Self-improvement task '${args.id}' updated to status '${s}'.`),
+    isError: false,
+  };
+}
+
 // ── Built-in tool extension registrations ─────────────────────────
 
 registerToolExtension({
@@ -1500,6 +1625,18 @@ registerToolExtension({
   cliUsage: 'minclaw tool call session_reset sessionKey="terminal:voice_macbook"',
 });
 
+registerToolExtension({
+  tool: queueSelfImprovementTool,
+  execute: (args, ctx) => executeQueueSelfImprovement(args, ctx),
+  cliUsage: 'minclaw tool call queue_self_improvement title="Add natural date parser" description="Allow natural strings in calendar"',
+});
+
+registerToolExtension({
+  tool: updateSelfImprovementTool,
+  execute: (args) => executeUpdateSelfImprovement(args),
+  cliUsage: 'minclaw tool call update_self_improvement id="si-..." status="completed"',
+});
+
 export async function executeTool(
   name: string,
   args: Record<string, any>,
@@ -1541,6 +1678,10 @@ export async function executeTool(
       return executeYoutube(args as Static<typeof YoutubeParams>, context);
     case "session_reset":
       return executeSessionReset(args as Static<typeof SessionResetParams>, context);
+    case "queue_self_improvement":
+      return executeQueueSelfImprovement(args as Static<typeof QueueSelfImprovementParams>, context);
+    case "update_self_improvement":
+      return executeUpdateSelfImprovement(args as Static<typeof UpdateSelfImprovementParams>);
     default:
       return { content: text(`Unknown tool: ${name}`), isError: true };
   }

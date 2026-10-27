@@ -36,10 +36,10 @@ describe("Token & Turn Watermark Windowing and Agys Stability", () => {
   });
 
   it("1. exports correct watermark constants according to empirical research", () => {
-    expect(WATERMARK_HIGH_TOKENS).toBe(32000);
+    expect(WATERMARK_HIGH_TOKENS).toBe(50000);
     expect(WATERMARK_HIGH_TURNS).toBe(20);
     expect(WATERMARK_KEEP_RECENT_TURNS).toBe(4);
-    expect(WATERMARK_CEILING_TOKENS).toBe(48000);
+    expect(WATERMARK_CEILING_TOKENS).toBe(75000);
     expect(AGY_MAX_OBSERVATION_CHARS).toBe(4000);
   });
 
@@ -96,11 +96,11 @@ describe("Token & Turn Watermark Windowing and Agys Stability", () => {
     });
     expect(compacted).toBe(false);
 
-    // 32,500 tokens DOES breach high watermark
-    expect(isWatermarkBreached(TEST_SESSION, 32500)).toBe(true);
+    // 50,500 tokens DOES breach high watermark
+    expect(isWatermarkBreached(TEST_SESSION, 50500)).toBe(true);
 
     compacted = await maybeAutoCompactSession(TEST_SESSION, {
-      lastInputTokens: 32500,
+      lastInputTokens: 50500,
       summarizer: async (prompt) => {
         expect(prompt).toContain("User query 1");
         return [

@@ -4,12 +4,15 @@ import { homedir } from "node:os";
 import { listAllUnreadEmails } from "../email/service.ts";
 import type { EmailMessageSummary } from "../email/types.ts";
 import { completeFast } from "../agent.ts";
+import { checkSelfImprovementQueue } from "../self-improvement/queue.ts";
 
 export type ReflexItem = {
-  source: "logseq" | "email" | "calendar" | "deal" | "briefing";
+  id?: string;
+  source: "logseq" | "email" | "calendar" | "deal" | "briefing" | "self-improvement";
   title: string;
   details?: string;
   urgent?: boolean;
+  score?: number;
 };
 
 export type ReflexReport = {
@@ -536,6 +539,9 @@ export async function runReflexCheck(options: { deferCommit?: boolean } = {}): P
 
   items.push(...logseqItems);
   items.push(...emailItems);
+
+  const selfImprovementItems = checkSelfImprovementQueue(deferCommit ? commits : undefined);
+  items.push(...selfImprovementItems);
 
   const briefing = checkBriefingDue(deferCommit ? commits : undefined);
   if (briefing) {

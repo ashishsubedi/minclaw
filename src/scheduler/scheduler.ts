@@ -107,8 +107,8 @@ export function addJob(job: Omit<ScheduledJob, "id" | "createdAt">): ScheduledJo
     createdAt: Date.now(),
   };
   jobStore.push(newJob);
-  saveJobs();
   startCronForJob(newJob);
+  saveJobs();
   console.log(`[scheduler] Added job: ${newJob.name} (${newJob.cronExpr})`);
   return newJob;
 }

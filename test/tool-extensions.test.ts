@@ -490,3 +490,35 @@ describe("email Tool", () => {
     expect(res.content[0]?.text).toContain("Error: 'id' parameter is required for action='read'");
   });
 });
+
+describe("calendar Tool & parseCalendarDateTime", () => {
+  test("parseCalendarDateTime parses ISO and local date/time strings", async () => {
+    const { parseCalendarDateTime } = await import("../src/email/calendar.ts");
+    const d1 = parseCalendarDateTime("2026-10-27T11:30:00+01:00");
+    expect(d1.toISOString()).toBe("2026-10-27T10:30:00.000Z");
+
+    const fallback = new Date("2026-10-27T00:00:00.000Z");
+    const d2 = parseCalendarDateTime("11:30", fallback);
+    expect(d2.getHours()).toBe(11);
+    expect(d2.getMinutes()).toBe(30);
+  });
+
+  test("calendar create_event requires summary and startTime", async () => {
+    const res1 = await executeTool("calendar", { action: "create_event" });
+    expect(res1.isError).toBe(true);
+    expect(res1.content[0]?.text).toContain("'summary' (event title) is required");
+
+    const res2 = await executeTool("calendar", { action: "create_event", summary: "Test meeting" });
+    expect(res2.isError).toBe(true);
+    expect(res2.content[0]?.text).toContain("'startTime' is required");
+  });
+
+  test("parseCliToolArgs parses --direct flag", async () => {
+    const { parseCliToolArgs } = await import("../src/cli/tool-ctl.ts");
+    const parsed = parseCliToolArgs(["call", "calendar", "--direct", "action=create_event", "summary=Lunch"]);
+    expect(parsed.toolName).toBe("calendar");
+    expect(parsed.directInProcess).toBe(true);
+    expect(parsed.args.action).toBe("create_event");
+    expect(parsed.args.summary).toBe("Lunch");
+  });
+});

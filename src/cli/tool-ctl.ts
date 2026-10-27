@@ -24,6 +24,7 @@ export type ParsedToolCliArgs = {
   toolName?: string;
   args: Record<string, any>;
   sessionKey?: string;
+  directInProcess?: boolean;
 };
 
 const NUMERIC_KEYS = new Set([
@@ -76,12 +77,18 @@ export function parseCliToolArgs(rawArgs: string[]): ParsedToolCliArgs {
   }
 
   let sessionKey: string | undefined;
+  let directInProcess = false;
   let jsonArgs: Record<string, any> = {};
   const keyValueArgs: Record<string, any> = {};
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i];
     if (!token) continue;
+
+    if (token === "--direct" || token === "--in-process" || token === "-d") {
+      directInProcess = true;
+      continue;
+    }
 
     if (token === "--session" || token === "-s") {
       sessionKey = tokens[++i];
@@ -160,6 +167,7 @@ export function parseCliToolArgs(rawArgs: string[]): ParsedToolCliArgs {
     toolName,
     args: mergedArgs,
     sessionKey,
+    directInProcess,
   };
 }
 
@@ -198,6 +206,7 @@ ${BOLD}Usage:${RESET}
 
 ${BOLD}Options:${RESET}
   --session, -s <sessionKey>                    Target session key (default: 'terminal:cli')
+  --direct, -d                                  Execute directly in-process (bypasses daemon socket)
   --json '<json>'                               JSON-encoded arguments object to merge
   --help, -h                                    Show this help
 
@@ -369,7 +378,7 @@ export async function handleToolCli(
   }
 
   // 1. First attempt to call via Daemon socket (if not explicitly forced in-process)
-  if (!options.directInProcess) {
+  if (!options.directInProcess && !parsed.directInProcess) {
     try {
       const daemonResult = await callToolViaDaemon(
         toolName,

@@ -3,10 +3,10 @@ import { join } from "path";
 import { loadConfig } from "../config.ts";
 import { getAllMessages, getSessionDir } from "../session.ts";
 
-export const WATERMARK_HIGH_TOKENS = 32_000;
+export const WATERMARK_HIGH_TOKENS = 50_000;
 export const WATERMARK_HIGH_TURNS = 20;
 export const WATERMARK_KEEP_RECENT_TURNS = 4;
-export const WATERMARK_CEILING_TOKENS = 48_000;
+export const WATERMARK_CEILING_TOKENS = 75_000;
 
 export type CompactedSessionState = {
   sessionKey: string;
