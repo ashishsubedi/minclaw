@@ -69,6 +69,17 @@ export function parseSkillFile(
 }
 
 /**
+ * Parses frontmatter and body from a skill markdown string.
+ */
+export function parseSkillFrontmatter(
+  content: string,
+  filePath: string = "SKILL.md",
+  source: "openclaw" | "local" = "local"
+): SkillEntry {
+  return parseSkillFile(content, filePath, source);
+}
+
+/**
  * Simple frontmatter parser. Handles multiline values (metadata spans multiple lines).
  * Not a full YAML parser — just enough for SKILL.md files.
  */

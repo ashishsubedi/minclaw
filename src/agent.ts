@@ -1,6 +1,6 @@
 import { completeSimple, getModel, type Message, type ToolResultMessage, type Model } from "@mariozechner/pi-ai";
 import { getApiKeyForProvider } from "./auth/credentials.ts";
-import { loadChannels, loadPersistentMemory, loadSystemPrompt } from "./brain/loader.ts";
+import { loadChannels, loadPersistentMemory, loadSystemPrompt, loadOperationalMemory, loadBrain } from "./brain/loader.ts";
 import { loadSkillsPrompt } from "./skills/loader.ts";
 import { loadConfig } from "./config.ts";
 import { rebuildMemoryIndex } from "./memory/store.ts";
@@ -412,29 +412,35 @@ Operating Directives:
    - Save permanent memory: bun run src/cli.ts tool call remember note="<fact>"
    - Search chat memory: bun run src/cli.ts tool call search_memory query="<keyword>"
    - Schedule reminder: bun run src/cli.ts tool call schedule_reminder when="<time>" message="<text>"
-   - Queue self-improvement: bun run src/cli.ts tool call queue_self_improvement title="..." description="..."
+   - Queue self-improvement: bun run src/cli.ts tool call queue_self_improvement title="..." description="..." targetType="skill"
 3. Strict Autonomous Step Budget (5 + 5 Hard Stop):
    - You have a strict budget of at most 5 tool calls for this request.
    - If absolutely necessary, you may use up to 5 additional tool calls (hard maximum 10 tools total).
    - Under NO circumstance exceed 10 tool calls. At or before 10 tool steps, STOP calling tools and deliver your final synthesized response to the user.
 4. Live Turn Decoupled Self-Improvement:
    - When responding to user interaction, DO NOT read or edit \`src/\` codebase files or run \`bun test\`.
+   - Following Google Research's Harness² framework, self-improvement targets execution scaffolding: OpenClaw skills (\`skills/<name>/SKILL.md\` — consult existing \`skills/skill-creator/SKILL.md\` for canonical patterns and structure), standalone helper scripts (\`scripts/<name>.(py|ts|sh)\`), or operational heuristics (\`brain/operational-memory.md\`) rather than mutating core daemon source code (\`src/*.ts\`).
    - Focus 100% on fulfilling the user's immediate request with available tools.
-   - If a tool capability is missing, queue it for background execution via:
-     \`bun run src/cli.ts tool call queue_self_improvement title="..." description="..."\`
+   - If a tool capability or workflow enhancement is missing, queue it for background execution with the appropriate targetType ("skill", "script", "operational_runbook", or "general") via:
+     \`bun run src/cli.ts tool call queue_self_improvement title="..." description="..." targetType="skill|script|operational_runbook|general"\`
      and solve the user's immediate request directly.
 5. Workspace Context: You are running inside the MinClaw workspace.
 6. Skip Logseq Memory: Unless explicitly requested by the user or strictly critical to the task, skip Logseq memory operations (do not query Logseq tasks/graphs or sync journal pulses). This session is for user's everyday random tasks, not autonomous AI development lifecycle tracking.
 7. Process Safety & Self-Improvement: NEVER execute \`minclaw restart\`, \`bun run src/cli.ts restart\`, \`minclaw stop\`, or kill the MinClaw daemon. MinClaw is your parent host process; restarting it will kill your turn mid-flight, drop the user's connection, and leave the daemon stopped.
-8. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.`;
+8. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.
+9. Operational Memory & Experience Library (Level 2 Experience):
+   When you discover enduring platform constraints, tool quirks, or CLI workarounds that future agent sessions must know, record them in \`brain/operational-memory.md\` under the appropriate section (\`## 🛠️ Tool & API Quirks\`, \`## 🧠 Environment & Platform Gotchas\`, or \`## 📜 Golden Operational Patterns\`).`;
 
 export function filterSystemPromptForAgy(systemPrompt: string): string {
   if (!systemPrompt || !systemPrompt.trim()) return "";
 
   // 1. Strip mcporter CLI section (AGY has native MCP host & call_mcp_tool)
-  let filtered = systemPrompt.replace(/## MCP Tools \(via mcporter\)[\s\S]*?(?=\n## )/, "");
+  let filtered = systemPrompt.replace(/## MCP Tools \(via mcporter\)[\s\S]*?(?=\n## |$)/, "");
 
-  // 2. Strip redundant skills that AGY natively provides
+  // 2. Strip Operational Memory section if present (it is injected in its own dedicated section for agy prompt caching)
+  filtered = filtered.replace(/## Operational Memory(?: & Runbook)?[\s\S]*?(?=\n## (?:Current Session Summary|Temporary Memory Index)|$)/, "");
+
+  // 3. Strip redundant skills that AGY natively provides
   const redundantSkills = [
     "fittrack",
     "searxng",
@@ -453,8 +459,14 @@ export function filterSystemPromptForAgy(systemPrompt: string): string {
   return filtered.replace(/\n{3,}/g, "\n\n").trim();
 }
 
+export function extractOperationalMemory(systemPrompt: string): string {
+  if (!systemPrompt) return "";
+  const match = systemPrompt.match(/## Operational Memory(?: & Runbook)?\s*\n([\s\S]*?)(?=\n## (?:Current Session Summary|Temporary Memory Index)|$)/);
+  return match && match[1] ? match[1].trim() : "";
+}
+
 export function buildAgyPrompt(
-  context: { systemPrompt: string; messages: Message[] },
+  context: { systemPrompt: string; messages: Message[]; operationalMemory?: string },
   sessionKey?: string,
   isContinuation = false
 ): string {
@@ -488,8 +500,9 @@ export function buildAgyPrompt(
   // Layout strictly ordered for LLM Prompt Caching:
   // 1. Static Invariant Header (identical across all sessions and channels)
   // 2. Static MinClaw System Prompt (persona, permanent memories, skills)
-  // 3. Dynamic Conversation History (past turns, tool calls/results)
-  // 4. Dynamic Current User Request
+  // 3. Static Operational Memory & Runbook (Harness² Level 2 operational heuristics)
+  // 4. Dynamic Conversation History (past turns, tool calls/results)
+  // 5. Dynamic Current User Request
   const sections: string[] = [AGY_STATIC_DELEGATION_HEADER];
 
   if (context.systemPrompt && context.systemPrompt.trim()) {
@@ -499,6 +512,13 @@ export function buildAgyPrompt(
         `[MinClaw System Context & Knowledge]\n${tailoredPrompt}`
       );
     }
+  }
+
+  const opMemory = context.operationalMemory || extractOperationalMemory(context.systemPrompt);
+  if (opMemory && opMemory.trim()) {
+    sections.push(
+      `[Operational Memory & Runbook]\n${opMemory.trim()}`
+    );
   }
 
   const historyTurns: string[] = [];
@@ -547,7 +567,7 @@ export function buildAgyPrompt(
 
 export async function callModelWithFallback(
   resolvedModels: ResolvedModel[],
-  context: { systemPrompt: string; messages: Message[]; tools: any[] },
+  context: { systemPrompt: string; messages: Message[]; tools: any[]; operationalMemory?: string },
   options: { temperature?: number; maxTokens?: number },
   sessionKey?: string,
   status?: (text: string) => Promise<void>
@@ -1286,12 +1306,13 @@ export async function runAgent(
   };
 }
 
-async function buildSystemPrompt(workspace: string, memoryContext: string, sessionKey?: string): Promise<string> {
-  const [system, channels, memory, skills] = await Promise.all([
+export async function buildSystemPrompt(workspace: string, memoryContext: string, sessionKey?: string): Promise<string> {
+  const [system, channels, memory, skills, operationalMemory] = await Promise.all([
     loadSystemPrompt(workspace),
     loadChannels(),
     loadPersistentMemory(),
     loadSkillsPrompt(),
+    loadOperationalMemory(),
   ]);
 
   const parts = [system];
@@ -1317,6 +1338,10 @@ async function buildSystemPrompt(workspace: string, memoryContext: string, sessi
     parts.push(`## Permanent Memory\n\n${memory}`);
   }
 
+  if (operationalMemory) {
+    parts.push(`## Operational Memory & Runbook\n\n${operationalMemory}`);
+  }
+
   if (sessionKey) {
     const compacted = getCompactedState(sessionKey);
     if (compacted?.summary && compacted.summary.trim()) {
@@ -1328,7 +1353,7 @@ async function buildSystemPrompt(workspace: string, memoryContext: string, sessi
 
   parts.push(`## Temporary Memory Index\n\nRecent conversation summaries:\n\n${memoryContext}`);
 
-  return parts.join("\n\n");
+  return parts.filter(Boolean).join("\n\n");
 }
 
 function buildUserContent(

@@ -335,6 +335,13 @@ const QueueSelfImprovementParams = Type.Object({
   title: Type.String({ description: "Short descriptive title of the improvement, feature gap, or bug to fix." }),
   description: Type.String({ description: "Details of what needs to be changed/implemented, relevant files, and expected behavior." }),
   toolName: Type.Optional(Type.String({ description: "Target tool or subsystem (e.g. 'calendar', 'email', 'voice', 'daemon')." })),
+  targetType: Type.Optional(
+    Type.Unsafe<"skill" | "script" | "operational_runbook" | "general">({
+      type: "string",
+      enum: ["skill", "script", "operational_runbook", "general"],
+      description: "Target scaffolding type: 'skill', 'script', 'operational_runbook', or 'general'.",
+    })
+  ),
 });
 
 export const queueSelfImprovementTool: Tool<typeof QueueSelfImprovementParams> = {
@@ -1495,6 +1502,7 @@ export async function executeQueueSelfImprovement(
     title: args.title.trim(),
     description: args.description.trim(),
     toolName: args.toolName?.trim(),
+    targetType: args.targetType,
     sourceSession: context?.sessionKey,
   });
   return {
@@ -1502,6 +1510,7 @@ export async function executeQueueSelfImprovement(
       `Self-improvement task queued successfully.\n` +
       `ID: ${task.id}\n` +
       `Title: "${task.title}"\n` +
+      `Target Type: ${task.targetType || "general"}\n` +
       `Status: pending (will be executed offline by background agent)`
     ),
     isError: false,
@@ -1628,7 +1637,7 @@ registerToolExtension({
 registerToolExtension({
   tool: queueSelfImprovementTool,
   execute: (args, ctx) => executeQueueSelfImprovement(args, ctx),
-  cliUsage: 'minclaw tool call queue_self_improvement title="Add natural date parser" description="Allow natural strings in calendar"',
+  cliUsage: 'minclaw tool call queue_self_improvement title="Add PDF parser skill" description="Parse PDF invoices using pdfplumber" targetType="skill"',
 });
 
 registerToolExtension({
