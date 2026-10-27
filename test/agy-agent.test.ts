@@ -191,6 +191,8 @@ describe("Antigravity Agent Fallback & System Prompt Integration", () => {
       expect(AGY_STATIC_DELEGATION_HEADER).toContain('bun run src/cli.ts tool call remember note="<fact>"');
       expect(AGY_STATIC_DELEGATION_HEADER).toContain('bun run src/cli.ts tool call search_memory query="<keyword>"');
       expect(AGY_STATIC_DELEGATION_HEADER).toContain('bun run src/cli.ts tool call schedule_reminder when="<time>" message="<text>"');
+      expect(AGY_STATIC_DELEGATION_HEADER).toContain("Process Safety & Self-Improvement");
+      expect(AGY_STATIC_DELEGATION_HEADER).toContain("NEVER execute `minclaw restart`");
     });
   });
 

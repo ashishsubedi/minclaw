@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { isAgenticJob, updateJobMode, addJob, removeJob, setJobsFileForTest, type ScheduledJob } from "../src/scheduler/scheduler.ts";
+import {
+  isAgenticJob,
+  updateJobMode,
+  addJob,
+  removeJob,
+  setJobsFileForTest,
+  parseTimeToJob,
+  type ScheduledJob,
+} from "../src/scheduler/scheduler.ts";
 import { unlinkSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -120,5 +128,73 @@ describe("ScheduledJob Agentic vs Reminder Detection", () => {
       setJobsFileForTest(); // restore default
       if (existsSync(tempFile)) unlinkSync(tempFile);
     }
+  });
+});
+
+describe("parseTimeToJob natural language parsing", () => {
+  test("parses relative minutes in various formats", () => {
+    const job1 = parseTimeToJob("in 5 minutes", "terminal", "user");
+    expect(job1).not.toBeNull();
+    expect(job1?.name).toBe("Reminder in 5m");
+    expect(job1?.oneShot).toBe(true);
+
+    const job2 = parseTimeToJob("in 15m", "terminal", "user");
+    expect(job2?.name).toBe("Reminder in 15m");
+
+    const job3 = parseTimeToJob("in 30 mins", "terminal", "user");
+    expect(job3?.name).toBe("Reminder in 30m");
+  });
+
+  test("parses relative hours in various formats", () => {
+    const job1 = parseTimeToJob("in 2 hours", "terminal", "user");
+    expect(job1).not.toBeNull();
+    expect(job1?.name).toBe("Reminder in 2h");
+    expect(job1?.oneShot).toBe(true);
+
+    const job2 = parseTimeToJob("in 1 hr", "terminal", "user");
+    expect(job2?.name).toBe("Reminder in 1h");
+
+    const job3 = parseTimeToJob("in 3h", "terminal", "user");
+    expect(job3?.name).toBe("Reminder in 3h");
+  });
+
+  test("parses tomorrow specifications with am/pm and dots", () => {
+    const tomorrow10am = parseTimeToJob("tomorrow at 10am", "terminal", "user");
+    expect(tomorrow10am).not.toBeNull();
+    expect(tomorrow10am?.name).toBe("Reminder tomorrow at 10:00");
+    expect(tomorrow10am?.cronExpr).toMatch(/^0 10 \d{1,2} \d{1,2} \*$/);
+    expect(tomorrow10am?.oneShot).toBe(true);
+
+    const tomorrowDotAm = parseTimeToJob("tomorrow at 10 a.m.", "terminal", "user");
+    expect(tomorrowDotAm?.name).toBe("Reminder tomorrow at 10:00");
+
+    const tomorrowAround1130 = parseTimeToJob("tomorrow around 11:30", "terminal", "user");
+    expect(tomorrowAround1130?.name).toBe("Reminder tomorrow at 11:30");
+    expect(tomorrowAround1130?.cronExpr).toMatch(/^30 11 \d{1,2} \d{1,2} \*$/);
+
+    const tomorrowDefault = parseTimeToJob("tomorrow", "terminal", "user");
+    expect(tomorrowDefault?.name).toBe("Reminder tomorrow at 10:00");
+  });
+
+  test("parses tomorrow periods (morning, afternoon, evening, night)", () => {
+    const morning = parseTimeToJob("tomorrow morning", "terminal", "user");
+    expect(morning?.name).toBe("Reminder tomorrow morning");
+    expect(morning?.cronExpr).toMatch(/^0 9 \d{1,2} \d{1,2} \*$/);
+
+    const afternoon = parseTimeToJob("tomorrow afternoon", "terminal", "user");
+    expect(afternoon?.name).toBe("Reminder tomorrow afternoon");
+    expect(afternoon?.cronExpr).toMatch(/^0 14 \d{1,2} \d{1,2} \*$/);
+
+    const evening = parseTimeToJob("tomorrow evening", "terminal", "user");
+    expect(evening?.name).toBe("Reminder tomorrow evening");
+    expect(evening?.cronExpr).toMatch(/^0 18 \d{1,2} \d{1,2} \*$/);
+  });
+
+  test("parses absolute times with around/at and a.m./p.m.", () => {
+    const at3pm = parseTimeToJob("at 3pm", "terminal", "user");
+    expect(at3pm?.name).toBe("Reminder at 15:00");
+
+    const aroundDotPm = parseTimeToJob("around 5 p.m.", "terminal", "user");
+    expect(aroundDotPm?.name).toBe("Reminder at 17:00");
   });
 });

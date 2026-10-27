@@ -171,9 +171,13 @@ export function parseTimeToJob(
   sender: string
 ): Omit<ScheduledJob, "id" | "createdAt"> | null {
   const lower = input.toLowerCase().trim();
+  const cleaned = lower
+    .replace(/[.,]/g, "") // normalize a.m. -> am, p.m. -> pm
+    .replace(/\s+/g, " ")
+    .trim();
 
-  // "in X minutes"
-  const inMinMatch = lower.match(/^in\s+(\d+)\s+min(?:ute)?s?$/);
+  // "in X minutes" / "in X mins" / "in X m"
+  const inMinMatch = cleaned.match(/^in\s+(\d+)\s*(?:m|min|mins|minute|minutes)$/);
   if (inMinMatch) {
     const mins = parseInt(inMinMatch[1]!);
     const target = new Date(Date.now() + mins * 60_000);
@@ -187,9 +191,77 @@ export function parseTimeToJob(
     };
   }
 
-  // "at HH:MM" or "at H" or "at Hpm/am"
-  const atMatch = lower.match(
-    /^(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/
+  // "in X hours" / "in X hrs" / "in X h"
+  const inHourMatch = cleaned.match(/^in\s+(\d+)\s*(?:h|hr|hrs|hour|hours)$/);
+  if (inHourMatch) {
+    const hours = parseInt(inHourMatch[1]!);
+    const target = new Date(Date.now() + hours * 3_600_000);
+    return {
+      name: `Reminder in ${hours}h`,
+      cronExpr: `${target.getMinutes()} ${target.getHours()} ${target.getDate()} ${target.getMonth() + 1} *`,
+      message: "",
+      channel,
+      sender,
+      oneShot: true,
+    };
+  }
+
+  // "tomorrow morning/afternoon/evening/night"
+  const tomorrowPeriodMatch = cleaned.match(
+    /^tomorrow\s+(morning|afternoon|evening|night)$/
+  );
+  if (tomorrowPeriodMatch) {
+    const period = tomorrowPeriodMatch[1] as string;
+    const hourMap: Record<string, number> = {
+      morning: 9,
+      afternoon: 14,
+      evening: 18,
+      night: 20,
+    };
+    const hours = hourMap[period] ?? 10;
+    const target = new Date();
+    target.setDate(target.getDate() + 1);
+    target.setHours(hours, 0, 0, 0);
+
+    return {
+      name: `Reminder tomorrow ${period}`,
+      cronExpr: `0 ${hours} ${target.getDate()} ${target.getMonth() + 1} *`,
+      message: "",
+      channel,
+      sender,
+      oneShot: true,
+    };
+  }
+
+  // "tomorrow" or "tomorrow at/around HH:MM" or "tomorrow at/around H" or "tomorrow at/around Hpm/am"
+  const tomorrowMatch = cleaned.match(
+    /^tomorrow(?:\s+(?:at|around))?(?:\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/
+  );
+  if (tomorrowMatch) {
+    let hours = tomorrowMatch[1] ? parseInt(tomorrowMatch[1]) : 10;
+    const minutes = tomorrowMatch[2] ? parseInt(tomorrowMatch[2]) : 0;
+    const ampm = tomorrowMatch[3];
+
+    if (ampm === "pm" && hours < 12) hours += 12;
+    if (ampm === "am" && hours === 12) hours = 0;
+
+    const target = new Date();
+    target.setDate(target.getDate() + 1);
+    target.setHours(hours, minutes, 0, 0);
+
+    return {
+      name: `Reminder tomorrow at ${hours}:${String(minutes).padStart(2, "0")}`,
+      cronExpr: `${minutes} ${hours} ${target.getDate()} ${target.getMonth() + 1} *`,
+      message: "",
+      channel,
+      sender,
+      oneShot: true,
+    };
+  }
+
+  // "at HH:MM" or "at H" or "at Hpm/am" or "around HH:MM"
+  const atMatch = cleaned.match(
+    /^(?:(?:at|around)\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/
   );
   if (atMatch) {
     let hours = parseInt(atMatch[1]!);
@@ -220,8 +292,8 @@ export function parseTimeToJob(
   }
 
   // "every day at HH:MM"
-  const everyDayMatch = lower.match(
-    /^every\s+day\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/
+  const everyDayMatch = cleaned.match(
+    /^every\s+day\s+(?:at|around)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/
   );
   if (everyDayMatch) {
     let hours = parseInt(everyDayMatch[1]!);

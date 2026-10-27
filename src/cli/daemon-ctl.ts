@@ -90,9 +90,27 @@ export async function startDaemon(options?: { verbose?: boolean }): Promise<void
   }
 }
 
-export async function stopDaemon(): Promise<void> {
+export function isRunningInsideDaemon(): boolean {
+  if (process.env.MINCLAW_IS_DAEMON === "1") return true;
+  const status = isDaemonRunning();
+  if (status.running && status.pid && process.env.MINCLAW_DAEMON_PID === String(status.pid)) {
+    return true;
+  }
+  return false;
+}
+
+export async function stopDaemon(options?: { force?: boolean }): Promise<void> {
   const paths = getPaths();
   const status = isDaemonRunning();
+  if (isRunningInsideDaemon() && !options?.force) {
+    console.error(
+      `${RED}Cannot stop daemon from inside an active agent turn or daemon child process.${RESET}`
+    );
+    console.error(
+      `${DIM}Terminating the daemon from within its own process tree aborts the active conversation and drops the connection. Run 'minclaw restart' from your terminal instead.${RESET}`
+    );
+    return;
+  }
   if (!status.running) {
     if (existsSync(paths.pid)) {
       try {
@@ -133,10 +151,19 @@ export async function stopDaemon(): Promise<void> {
   console.log(`${GREEN}Daemon killed.${RESET}`);
 }
 
-export async function restartDaemon(options?: { verbose?: boolean }): Promise<void> {
+export async function restartDaemon(options?: { verbose?: boolean; force?: boolean }): Promise<void> {
+  if (isRunningInsideDaemon() && !options?.force) {
+    console.error(
+      `${RED}Cannot restart daemon from inside an active agent turn or daemon child process.${RESET}`
+    );
+    console.error(
+      `${DIM}Restarting the daemon from within its own process tree aborts the active turn and leaves MinClaw stopped. Inform the user to run 'minclaw restart' from their terminal instead.${RESET}`
+    );
+    return;
+  }
   const status = isDaemonRunning();
   if (status.running) {
-    await stopDaemon();
+    await stopDaemon(options);
   }
   await startDaemon(options);
 }

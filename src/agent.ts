@@ -413,7 +413,8 @@ Operating Directives:
    - Schedule reminder: bun run src/cli.ts tool call schedule_reminder when="<time>" message="<text>"
 3. Workspace Context: You are running inside the MinClaw workspace.
 4. Skip Logseq Memory: Unless explicitly requested by the user or strictly critical to the task, skip Logseq memory operations (do not query Logseq tasks/graphs or sync journal pulses). This session is for user's everyday random tasks, not autonomous AI development lifecycle tracking.
-5. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.`;
+5. Process Safety & Self-Improvement: When improving MinClaw source files or fixing tool bugs, NEVER execute \`minclaw restart\`, \`bun run src/cli.ts restart\`, \`minclaw stop\`, or kill the MinClaw daemon. MinClaw is your parent host process; restarting it will kill your turn mid-flight, drop the user's connection, and leave the daemon stopped. Always complete the user's request in the current turn and inform the user if a daemon restart is needed to reload updated code.
+6. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.`;
 
 export function filterSystemPromptForAgy(systemPrompt: string): string {
   if (!systemPrompt || !systemPrompt.trim()) return "";

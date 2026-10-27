@@ -39,6 +39,8 @@ async function main() {
   // --- PID file ---
   const pidPath = join(getStateDir(), PID_FILENAME);
   writeFileSync(pidPath, String(process.pid), "utf-8");
+  process.env.MINCLAW_IS_DAEMON = "1";
+  process.env.MINCLAW_DAEMON_PID = String(process.pid);
 
   // --- Daemon socket server ---
   const daemonServer = startDaemonServer();
