@@ -2,6 +2,7 @@ import { expect, test, describe, mock } from "bun:test";
 import {
   normalizeAgyModelName,
   buildAgyPrompt,
+  filterSystemPromptForAgy,
   clearAgySession,
   getAgySession,
   killActiveAgyProcesses,
@@ -211,6 +212,51 @@ describe("Antigravity Agent Fallback & System Prompt Integration", () => {
       expect(formatToolStatus("read_file", { Path: "/Users/test/package.json" })).toBe("Running tool: read_file");
       expect(formatToolStatus("call_mcp_tool", { ToolName: "get_daily_summary" })).toBe("Running tool: mcp:get_daily_summary");
       expect(formatToolStatus("search_web", { query: "minclaw" })).toBe("Running tool: search_web");
+    });
+  });
+
+  describe("AGY Tailored Prompt Filtering (filterSystemPromptForAgy)", () => {
+    test("strips mcporter documentation while keeping other instructions", () => {
+      const sample = `
+You are MinClaw.
+
+## MCP Tools (via mcporter)
+Use mcporter list to see tools.
+Call via mcporter call server.tool.
+
+## Logseq Second Brain & Human-in-the-Loop Control Center
+Logseq operating rules and tasks tagged #agent_task.
+
+## YouTube Playback & Media
+Call youtube tool directly.
+      `.trim();
+
+      const filtered = filterSystemPromptForAgy(sample);
+      expect(filtered).not.toContain("## MCP Tools (via mcporter)");
+      expect(filtered).not.toContain("mcporter list");
+      expect(filtered).toContain("## Logseq Second Brain & Human-in-the-Loop Control Center");
+      expect(filtered).toContain("## YouTube Playback & Media");
+    });
+
+    test("filters out duplicate skills that AGY provides natively", () => {
+      const sample = `
+## Skills Catalog
+
+<ready_skills>
+- **fittrack**: Track workouts (in skills/fittrack/SKILL.md)
+- **searxng**: Search web (in skills/searxng/SKILL.md)
+- **youtube**: Play music in Firefox (in skills/youtube/SKILL.md)
+- **coding-agent**: Code agent (in skills/coding-agent/SKILL.md)
+- **weather**: Get weather (in skills/weather/SKILL.md)
+</ready_skills>
+      `.trim();
+
+      const filtered = filterSystemPromptForAgy(sample);
+      expect(filtered).not.toContain("- **fittrack**:");
+      expect(filtered).not.toContain("- **searxng**:");
+      expect(filtered).not.toContain("- **coding-agent**:");
+      expect(filtered).toContain("- **youtube**:");
+      expect(filtered).toContain("- **weather**:");
     });
   });
 });
