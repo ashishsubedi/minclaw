@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, appendFileSync } from "fs";
+import { mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync, appendFileSync, chmodSync } from "fs";
 import { resolve, join } from "path";
 import { loadConfig } from "../config.ts";
 import { getCompactedState } from "./compaction.ts";
@@ -47,10 +47,21 @@ export function sessionKey(channel: string, sender: string): string {
 }
 
 export function ensureMemoryDirs(): void {
+  const memDir = getMemoryDir();
+  if (!existsSync(memDir)) {
+    mkdirSync(memDir, { recursive: true, mode: 0o700 });
+  }
+  try {
+    chmodSync(memDir, 0o700);
+  } catch {}
+
   const chatsDir = getChatsDir();
   if (!existsSync(chatsDir)) {
-    mkdirSync(chatsDir, { recursive: true });
+    mkdirSync(chatsDir, { recursive: true, mode: 0o700 });
   }
+  try {
+    chmodSync(chatsDir, 0o700);
+  } catch {}
 }
 
 /** Append a message to the session's chat markdown file */
@@ -74,6 +85,9 @@ export function appendChat(
   } else {
     appendFileSync(filePath, entry, "utf-8");
   }
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {}
 }
 
 /** Get all chat history for a session */
@@ -174,5 +188,8 @@ export function rebuildMemoryIndex(): string {
   }
 
   writeFileSync(indexPath, md, "utf-8");
+  try {
+    chmodSync(indexPath, 0o600);
+  } catch {}
   return md;
 }

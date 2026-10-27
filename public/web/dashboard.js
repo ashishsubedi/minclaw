@@ -35,7 +35,11 @@
   // API Fetch Helper
   async function fetchJSON(url, options = {}) {
     try {
-      const res = await fetch(url, options);
+      const headers = { ...(options.headers || {}) };
+      if (options.body && !headers["Content-Type"] && !headers["content-type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+      const res = await fetch(url, { ...options, headers });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || `HTTP ${res.status}`);

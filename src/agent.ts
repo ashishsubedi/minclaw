@@ -565,6 +565,31 @@ export function buildAgyPrompt(
   return sections.join("\n\n");
 }
 
+export function buildAgySpawnArgs(
+  promptText: string,
+  modelId: string,
+  conversationId?: string
+): string[] {
+  const spawnArgs = [
+    "agy",
+    "--print",
+    promptText,
+    "--model",
+    modelId,
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--sandbox",
+    "--disable-slash-commands",
+    "--print-timeout",
+    "180s",
+  ];
+  if (conversationId) {
+    spawnArgs.push("--conversation", conversationId);
+  }
+  return spawnArgs;
+}
+
 export async function callModelWithFallback(
   resolvedModels: ResolvedModel[],
   context: { systemPrompt: string; messages: Message[]; tools: any[]; operationalMemory?: string },
@@ -595,22 +620,7 @@ export async function callModelWithFallback(
           const conversationId = sessionKey ? agySessions.get(sessionKey) : undefined;
           const promptText = buildAgyPrompt(context, sessionKey, !!conversationId);
 
-          const spawnArgs = [
-            "agy",
-            "--print",
-            promptText,
-            "--model",
-            model.id,
-            "--output-format",
-            "stream-json",
-            "--dangerously-skip-permissions",
-            "--disable-slash-commands",
-            "--print-timeout",
-            "180s",
-          ];
-          if (conversationId) {
-            spawnArgs.push("--conversation", conversationId);
-          }
+          const spawnArgs = buildAgySpawnArgs(promptText, model.id, conversationId);
 
           const proc = Bun.spawn(spawnArgs, {
             cwd: process.cwd(),

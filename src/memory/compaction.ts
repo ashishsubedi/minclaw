@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync, chmodSync } from "fs";
 import { join } from "path";
 import { loadConfig } from "../config.ts";
 import { getAllMessages, getSessionDir } from "../session.ts";
@@ -47,6 +47,9 @@ export function getCompactedState(sessionKey: string): CompactedSessionState | n
 export function saveCompactedState(state: CompactedSessionState): void {
   const filePath = getCompactedFilePath(state.sessionKey);
   writeFileSync(filePath, JSON.stringify(state, null, 2), "utf-8");
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {}
 }
 
 export function clearCompactedState(sessionKey: string): void {

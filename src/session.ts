@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, appendFileSync, readFileSync, unlinkSync } from "fs";
+import { mkdirSync, existsSync, appendFileSync, readFileSync, unlinkSync, chmodSync } from "fs";
 import { resolve, join } from "path";
 import { loadConfig } from "./config.ts";
 
@@ -41,7 +41,12 @@ export type SessionMessage = {
 export function getSessionDir(): string {
   const config = loadConfig();
   const dir = resolve(config.sessions.dir);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  try {
+    chmodSync(dir, 0o700);
+  } catch {}
   return dir;
 }
 
@@ -52,6 +57,9 @@ function sessionFilePath(sessionKey: string): string {
 export function appendMessage(sessionKey: string, msg: SessionMessage): void {
   const path = sessionFilePath(sessionKey);
   appendFileSync(path, JSON.stringify(msg) + "\n", "utf-8");
+  try {
+    chmodSync(path, 0o600);
+  } catch {}
 }
 
 export function getAllMessages(sessionKey: string): SessionMessage[] {

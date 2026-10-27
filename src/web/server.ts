@@ -84,6 +84,96 @@ function text(data: string, status = 200, contentType = "text/plain; charset=utf
   });
 }
 
+export function isValidOrigin(originStr: string): boolean {
+  if (!originStr) return false;
+  try {
+    const parsed = new URL(originStr);
+    const proto = parsed.protocol;
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (proto !== "http:" && proto !== "https:") {
+      return false;
+    }
+
+    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]") {
+      return true;
+    }
+
+    if (hostname === "minclaw.localhost" || hostname.endsWith(".minclaw.localhost")) {
+      return true;
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function verifyCsrfAndOrigin(
+  req: Request,
+  url: URL
+): { ok: boolean; status?: number; error?: string } {
+  // 1. Check Host header: must be localhost:<port>, 127.0.0.1:<port>, minclaw.localhost (or minclaw.localhost:<port>)
+  const host = req.headers.get("host") || url.host || "";
+  const validHostRegex = /^(localhost|127\.0\.0\.1|minclaw\.localhost|\[::1\])(:\d+)?$/i;
+  if (!host || !validHostRegex.test(host.trim())) {
+    return { ok: false, status: 403, error: "Invalid Host header" };
+  }
+
+  // 2. Allow OAuth callbacks like /api/auth/google/callback
+  if (url.pathname === "/api/auth/google/callback" || url.pathname.startsWith("/api/auth/")) {
+    return { ok: true };
+  }
+
+  // 3. Allow static assets (non /api/ paths) and non-mutating GET/HEAD/OPTIONS requests
+  if (!url.pathname.startsWith("/api/")) {
+    return { ok: true };
+  }
+
+  const method = req.method.toUpperCase();
+  if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
+    return { ok: true };
+  }
+
+  // 4. For mutating requests (POST, PUT, PATCH, DELETE):
+  // Check Sec-Fetch-Site: if present, reject "cross-site". Allow "same-origin", "same-site", or "none"
+  const secFetchSite = req.headers.get("sec-fetch-site")?.toLowerCase();
+  if (secFetchSite) {
+    if (secFetchSite === "cross-site" || (secFetchSite !== "same-origin" && secFetchSite !== "same-site" && secFetchSite !== "none")) {
+      return { ok: false, status: 403, error: "Cross-site requests forbidden" };
+    }
+  }
+
+  // Check Origin / Referer: if present, origin must match http://localhost:*, http://127.0.0.1:*, http://minclaw.localhost*, https://minclaw.localhost*
+  const origin = req.headers.get("origin");
+  if (origin && !isValidOrigin(origin)) {
+    return { ok: false, status: 403, error: "Cross-origin request forbidden" };
+  }
+
+  const referer = req.headers.get("referer");
+  if (referer && !isValidOrigin(referer)) {
+    return { ok: false, status: 403, error: "Cross-origin request forbidden" };
+  }
+
+  // Check Content-Type: must be application/json (ignoring parameters like charset) if request has a body. Reject text/plain or missing content-type on JSON API requests.
+  const rawContentType = req.headers.get("content-type");
+  const contentLength = req.headers.get("content-length");
+  const hasContentLength = contentLength !== null && parseInt(contentLength, 10) > 0;
+  const hasChunked = req.headers.get("transfer-encoding") === "chunked";
+  const hasBody = req.body !== null || hasContentLength || hasChunked;
+
+  if (rawContentType) {
+    const mime = (rawContentType.split(";")[0] ?? "").trim().toLowerCase();
+    if (mime !== "application/json") {
+      return { ok: false, status: 415, error: "Content-Type must be application/json" };
+    }
+  } else if (hasBody) {
+    return { ok: false, status: 415, error: "Content-Type must be application/json" };
+  }
+
+  return { ok: true };
+}
+
 async function serveStatic(pathname: string): Promise<Response> {
   let normalized = pathname === "/" ? "/index.html" : pathname;
   if (normalized === "/favicon.ico") {
@@ -553,6 +643,11 @@ export function startWebServer(startPort = PORT): Bun.Server<undefined> {
           const url = new URL(req.url);
 
           if (url.pathname.startsWith("/api/")) {
+            const verifyResult = verifyCsrfAndOrigin(req, url);
+            if (!verifyResult.ok) {
+              return json({ error: verifyResult.error }, verifyResult.status || 403);
+            }
+
             try {
               return await handleApi(req, url);
             } catch (err) {

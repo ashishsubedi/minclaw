@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync } from "fs";
+import { existsSync, unlinkSync, chmodSync } from "fs";
 import { join } from "path";
 import type { Socket } from "bun";
 import { getStateDir } from "../auth/credentials.ts";
@@ -118,6 +118,10 @@ export function startDaemonServer(): { stop: () => void } {
       },
     },
   });
+
+  try {
+    chmodSync(socketPath, 0o600);
+  } catch {}
 
   console.log(`[daemon] Listening on ${socketPath}`);
 

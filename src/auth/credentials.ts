@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync, chmodSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { getOAuthApiKey } from "@mariozechner/pi-ai";
@@ -42,21 +42,40 @@ export type Credentials =
   | { method: "oauth"; provider?: "anthropic"; oauth: OAuthCredentials }
   | { method: "oauth"; provider: "openai-codex"; openaiCodex: OpenAICodexCredentials };
 
-const STATE_DIR = join(homedir(), ".minclaw");
-const CREDS_PATH = join(STATE_DIR, "credentials.json");
+const DEFAULT_STATE_DIR = join(homedir(), ".minclaw");
 
 export function getStateDir(): string {
-  return STATE_DIR;
+  return process.env.MINCLAW_STATE_DIR?.trim() || DEFAULT_STATE_DIR;
+}
+
+export function getCredsPath(): string {
+  return join(getStateDir(), "credentials.json");
 }
 
 export function ensureStateDir(): void {
-  if (!existsSync(STATE_DIR)) {
-    mkdirSync(STATE_DIR, { recursive: true });
+  const stateDir = getStateDir();
+  if (!existsSync(stateDir)) {
+    mkdirSync(stateDir, { recursive: true, mode: 0o700 });
   }
-  const logsDir = join(STATE_DIR, "logs");
+  try {
+    chmodSync(stateDir, 0o700);
+  } catch {}
+
+  const logsDir = join(stateDir, "logs");
   if (!existsSync(logsDir)) {
-    mkdirSync(logsDir, { recursive: true });
+    mkdirSync(logsDir, { recursive: true, mode: 0o700 });
   }
+  try {
+    chmodSync(logsDir, 0o700);
+  } catch {}
+
+  const tmpDir = join(stateDir, "tmp");
+  if (!existsSync(tmpDir)) {
+    mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+  }
+  try {
+    chmodSync(tmpDir, 0o700);
+  } catch {}
 }
 
 /** Detect old single-credential format (has `method` at top level) */
@@ -148,16 +167,20 @@ async function refreshOAuthCredentials(
 
 /** Load all provider credentials. Auto-migrates old single-credential format. */
 export function loadAllCredentials(): CredentialsStore {
-  if (!existsSync(CREDS_PATH)) return {};
+  const credsPath = getCredsPath();
+  if (!existsSync(credsPath)) return {};
   try {
-    const raw = readFileSync(CREDS_PATH, "utf-8");
+    const raw = readFileSync(credsPath, "utf-8");
     const data = JSON.parse(raw);
 
     if (isOldFormat(data)) {
       const migrated = migrateOldCredentials(data);
       // Persist the migrated format
       ensureStateDir();
-      writeFileSync(CREDS_PATH, JSON.stringify(migrated, null, 2), "utf-8");
+      writeFileSync(credsPath, JSON.stringify(migrated, null, 2), "utf-8");
+      try {
+        chmodSync(credsPath, 0o600);
+      } catch {}
       return migrated;
     }
 
@@ -173,9 +196,13 @@ export function saveProviderCredential(
   cred: ProviderCredential
 ): void {
   ensureStateDir();
+  const credsPath = getCredsPath();
   const store = loadAllCredentials();
   store[provider] = cred;
-  writeFileSync(CREDS_PATH, JSON.stringify(store, null, 2), "utf-8");
+  writeFileSync(credsPath, JSON.stringify(store, null, 2), "utf-8");
+  try {
+    chmodSync(credsPath, 0o600);
+  } catch {}
 }
 
 /** Remove a provider's credential */
@@ -183,7 +210,11 @@ export function removeProviderCredential(provider: string): void {
   const store = loadAllCredentials();
   delete store[provider];
   ensureStateDir();
-  writeFileSync(CREDS_PATH, JSON.stringify(store, null, 2), "utf-8");
+  const credsPath = getCredsPath();
+  writeFileSync(credsPath, JSON.stringify(store, null, 2), "utf-8");
+  try {
+    chmodSync(credsPath, 0o600);
+  } catch {}
 }
 
 /** Refresh an Anthropic OAuth token if expired. Returns the (possibly refreshed) access token. */

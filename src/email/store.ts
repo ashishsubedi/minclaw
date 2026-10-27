@@ -1,16 +1,25 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { EmailAccount, GoogleOAuthConfig } from "./types.ts";
+import { getStateDir } from "../auth/credentials.ts";
 
-const STATE_DIR = join(homedir(), ".minclaw");
-const ACCOUNTS_FILE = join(STATE_DIR, "email-accounts.json");
-const GOOGLE_OAUTH_FILE = join(STATE_DIR, "google-oauth.json");
+function getAccountsFile(): string {
+  return join(getStateDir(), "email-accounts.json");
+}
+
+function getGoogleOAuthFile(): string {
+  return join(getStateDir(), "google-oauth.json");
+}
 
 function ensureStateDir(): void {
-  if (!existsSync(STATE_DIR)) {
-    mkdirSync(STATE_DIR, { recursive: true });
+  const dir = getStateDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
+  try {
+    chmodSync(dir, 0o700);
+  } catch {}
 }
 
 export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
@@ -20,9 +29,10 @@ export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
     return { clientId: envId, clientSecret: envSecret };
   }
 
-  if (existsSync(GOOGLE_OAUTH_FILE)) {
+  const googleOAuthFile = getGoogleOAuthFile();
+  if (existsSync(googleOAuthFile)) {
     try {
-      const data = JSON.parse(readFileSync(GOOGLE_OAUTH_FILE, "utf-8")) as GoogleOAuthConfig;
+      const data = JSON.parse(readFileSync(googleOAuthFile, "utf-8")) as GoogleOAuthConfig;
       if (data.clientId && data.clientSecret) {
         return data;
       }
@@ -34,13 +44,18 @@ export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
 
 export function saveGoogleOAuthConfig(config: GoogleOAuthConfig): void {
   ensureStateDir();
-  writeFileSync(GOOGLE_OAUTH_FILE, JSON.stringify(config, null, 2), "utf-8");
+  const googleOAuthFile = getGoogleOAuthFile();
+  writeFileSync(googleOAuthFile, JSON.stringify(config, null, 2), "utf-8");
+  try {
+    chmodSync(googleOAuthFile, 0o600);
+  } catch {}
 }
 
 export function getEmailAccounts(): EmailAccount[] {
-  if (!existsSync(ACCOUNTS_FILE)) return [];
+  const accountsFile = getAccountsFile();
+  if (!existsSync(accountsFile)) return [];
   try {
-    const raw = readFileSync(ACCOUNTS_FILE, "utf-8");
+    const raw = readFileSync(accountsFile, "utf-8");
     return JSON.parse(raw) as EmailAccount[];
   } catch {
     return [];
@@ -61,7 +76,11 @@ export function saveEmailAccount(account: EmailAccount): void {
   } else {
     accounts.push(account);
   }
-  writeFileSync(ACCOUNTS_FILE, JSON.stringify(accounts, null, 2), "utf-8");
+  const accountsFile = getAccountsFile();
+  writeFileSync(accountsFile, JSON.stringify(accounts, null, 2), "utf-8");
+  try {
+    chmodSync(accountsFile, 0o600);
+  } catch {}
 }
 
 export function removeEmailAccount(id: string): boolean {
@@ -69,7 +88,11 @@ export function removeEmailAccount(id: string): boolean {
   const accounts = getEmailAccounts();
   const next = accounts.filter((a) => a.id !== id && a.email !== id);
   if (next.length === accounts.length) return false;
-  writeFileSync(ACCOUNTS_FILE, JSON.stringify(next, null, 2), "utf-8");
+  const accountsFile = getAccountsFile();
+  writeFileSync(accountsFile, JSON.stringify(next, null, 2), "utf-8");
+  try {
+    chmodSync(accountsFile, 0o600);
+  } catch {}
   return true;
 }
 
