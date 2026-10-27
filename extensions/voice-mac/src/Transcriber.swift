@@ -53,7 +53,12 @@ public class Transcriber {
         }
 
         let prefix = "minclaw_voice_\(Int(Date().timeIntervalSince1970 * 1000))"
-        let tmpDir = "/tmp"
+        let stateDir = ProcessInfo.processInfo.environment["MINCLAW_STATE_DIR"] ?? "\(FileManager.default.homeDirectoryForCurrentUser.path)/.minclaw"
+        let tmpDir = "\(stateDir)/tmp"
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: tmpDir) {
+            try? fm.createDirectory(atPath: tmpDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        }
         let txtPath = "\(tmpDir)/\(prefix).txt"
 
         let proc = Process()

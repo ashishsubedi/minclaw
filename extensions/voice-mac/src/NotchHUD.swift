@@ -20,7 +20,9 @@ public struct NotchHUDView: View {
                     NotchCenterBadge(
                         state: viewModel.state,
                         audioLevel: viewModel.audioLevel,
-                        statusMessage: viewModel.statusMessage
+                        statusMessage: viewModel.statusMessage,
+                        isVoiceNotRecognized: viewModel.isVoiceNotRecognized,
+                        onTouchIdUnlock: viewModel.onTouchIdUnlock
                     )
                 }
                 .padding(.horizontal, 12)
@@ -72,6 +74,9 @@ public struct NotchHUDView: View {
     }
 
     private var auraShadowColor: Color {
+        if viewModel.isVoiceNotRecognized {
+            return Color.red.opacity(0.65)
+        }
         switch viewModel.state {
         case .listening:
             return Color.cyan.opacity(0.55 + Double(viewModel.audioLevel) * 0.35)
@@ -85,6 +90,9 @@ public struct NotchHUDView: View {
     }
 
     private var auraRadius: CGFloat {
+        if viewModel.isVoiceNotRecognized {
+            return 18
+        }
         switch viewModel.state {
         case .listening:
             return CGFloat(14 + viewModel.audioLevel * 14)
@@ -98,7 +106,7 @@ public struct NotchHUDView: View {
     }
 
     private var auraOffsetY: CGFloat {
-        viewModel.state == .idle ? 0 : 5
+        (viewModel.state == .idle && !viewModel.isVoiceNotRecognized) ? 0 : 5
     }
 }
 
@@ -107,48 +115,83 @@ struct NotchCenterBadge: View {
     let state: VoiceState
     let audioLevel: Float
     let statusMessage: String
+    var isVoiceNotRecognized: Bool = false
+    var onTouchIdUnlock: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 8) {
-            switch state {
-            case .listening:
-                PulsingCircle(color: .cyan, level: audioLevel)
-                Text("Listening...")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                    .shadow(color: .cyan.opacity(0.6), radius: 6)
+            if isVoiceNotRecognized {
+                Button(action: {
+                    onTouchIdUnlock?()
+                }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.fill")
+                            .foregroundColor(.yellow)
+                            .font(.system(size: 11))
+                        Text("Voice not recognized")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                        HStack(spacing: 3) {
+                            Image(systemName: "touchid")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Unlock")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                        }
+                        .foregroundColor(.cyan)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.white.opacity(0.18)))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        Capsule()
+                            .fill(Color.red.opacity(0.4))
+                            .overlay(Capsule().stroke(Color.red.opacity(0.8), lineWidth: 1))
+                    )
+                }
+                .buttonStyle(PlainButtonStyle())
+            } else {
+                switch state {
+                case .listening:
+                    PulsingCircle(color: .cyan, level: audioLevel)
+                    Text("Listening...")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .shadow(color: .cyan.opacity(0.6), radius: 6)
 
-            case .thinking:
-                ThinkingOrb()
-                if isToolExecuting {
-                    HStack(spacing: 5) {
-                        toolIcon
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(.orange)
-                        Text(cleanedToolName)
+                case .thinking:
+                    ThinkingOrb()
+                    if isToolExecuting {
+                        HStack(spacing: 5) {
+                            toolIcon
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.orange)
+                            Text(cleanedToolName)
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundColor(.white.opacity(0.95))
+                        }
+                    } else {
+                        Text("Thinking...")
                             .font(.system(size: 12, weight: .semibold, design: .rounded))
                             .foregroundColor(.white.opacity(0.95))
                     }
-                } else {
-                    Text("Thinking...")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundColor(.white.opacity(0.95))
+
+                case .speaking:
+                    SpeakingEqualizerOrb()
+                    Text("Speaking...")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundColor(.white)
+                        .shadow(color: Color.green.opacity(0.6), radius: 6)
+
+                case .idle:
+                    Circle()
+                        .fill(Color.white.opacity(0.35))
+                        .frame(width: 6, height: 6)
+                    Text("MinClaw")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundColor(.white.opacity(0.7))
                 }
-
-            case .speaking:
-                SpeakingEqualizerOrb()
-                Text("Speaking...")
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                    .shadow(color: Color.green.opacity(0.6), radius: 6)
-
-            case .idle:
-                Circle()
-                    .fill(Color.white.opacity(0.35))
-                    .frame(width: 6, height: 6)
-                Text("MinClaw")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundColor(.white.opacity(0.7))
             }
         }
     }

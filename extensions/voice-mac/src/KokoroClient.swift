@@ -11,8 +11,8 @@ public class KokoroClient: NSObject, AVAudioPlayerDelegate {
     public var onPlaybackFinished: (() -> Void)?
 
     public override init() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        self.socketPath = "\(home)/.minclaw/kokoro.sock"
+        let stateDir = ProcessInfo.processInfo.environment["MINCLAW_STATE_DIR"] ?? "\(FileManager.default.homeDirectoryForCurrentUser.path)/.minclaw"
+        self.socketPath = "\(stateDir)/kokoro.sock"
         super.init()
     }
 
@@ -300,6 +300,33 @@ public class KokoroClient: NSObject, AVAudioPlayerDelegate {
         }
 
         return path
+    }
+
+    public func verifySpeaker(audioPath: String) -> (enrolled: Bool, verified: Bool, score: Float) {
+        guard FileManager.default.fileExists(atPath: audioPath) else {
+            return (enrolled: false, verified: true, score: 0.0)
+        }
+        ensureServerRunning()
+        let req: [String: Any] = [
+            "action": "verify_speaker",
+            "audio_path": audioPath
+        ]
+        guard let resp = sendSocketRequest(req) else {
+            // Fail-safe open if Kokoro server is unreachable
+            return (enrolled: false, verified: true, score: 0.0)
+        }
+        let enrolled = resp["enrolled"] as? Bool ?? false
+        let verified = resp["verified"] as? Bool ?? true
+        let score = (resp["score"] as? NSNumber)?.floatValue ?? 0.0
+        return (enrolled: enrolled, verified: verified, score: score)
+    }
+
+    public func getVoiceprintStatus() -> [String: Any]? {
+        ensureServerRunning()
+        let req: [String: Any] = [
+            "action": "voiceprint_status"
+        ]
+        return sendSocketRequest(req)
     }
 
     private func playAudioFile(_ url: URL, completion: (() -> Void)?) {

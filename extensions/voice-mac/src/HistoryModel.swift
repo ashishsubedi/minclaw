@@ -28,10 +28,12 @@ public class VoiceViewModel: ObservableObject {
     @Published public var isVisible: Bool = false
     @Published public var uiMode: UIMode = .notch
     @Published public var statusMessage: String = ""
+    @Published public var isVoiceNotRecognized: Bool = false
 
     private var autoHideTimer: Timer?
     public let maxTurns: Int = 5
     public var onResetSession: (() -> Void)?
+    public var onTouchIdUnlock: (() -> Void)?
 
     public init(uiMode: UIMode = .notch) {
         self.uiMode = uiMode
@@ -39,6 +41,7 @@ public class VoiceViewModel: ObservableObject {
 
     public func setListening() {
         stopAutoHideTimer()
+        isVoiceNotRecognized = false
         state = .listening
         statusMessage = "Listening..."
         withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
@@ -48,6 +51,7 @@ public class VoiceViewModel: ObservableObject {
 
     public func setTranscribing() {
         stopAutoHideTimer()
+        isVoiceNotRecognized = false
         state = .thinking
         statusMessage = "Transcribing audio..."
         audioLevel = 0.0
@@ -55,6 +59,7 @@ public class VoiceViewModel: ObservableObject {
 
     public func setThinking(prompt: String) {
         stopAutoHideTimer()
+        isVoiceNotRecognized = false
         state = .thinking
         statusMessage = "Thinking..."
         audioLevel = 0.0
@@ -64,14 +69,25 @@ public class VoiceViewModel: ObservableObject {
 
     public func setSpeaking(response: String) {
         stopAutoHideTimer()
+        isVoiceNotRecognized = false
         state = .speaking
         statusMessage = "Speaking..."
         // Add assistant turn
         addTurn(role: "assistant", text: response)
     }
 
+    public func setVoiceNotRecognized() {
+        stopAutoHideTimer()
+        state = .idle
+        isVoiceNotRecognized = true
+        statusMessage = "🔒 Voice not recognized"
+        audioLevel = 0.0
+        startAutoHideTimer(after: 30.0)
+    }
+
     public func setIdle() {
         state = .idle
+        isVoiceNotRecognized = false
         statusMessage = ""
         audioLevel = 0.0
         startAutoHideTimer(after: 15.0)
@@ -81,6 +97,7 @@ public class VoiceViewModel: ObservableObject {
         if Thread.isMainThread {
             self.turns.removeAll()
             self.state = .idle
+            self.isVoiceNotRecognized = false
             self.statusMessage = "Session cleared"
             self.audioLevel = 0.0
             self.startAutoHideTimer(after: 15.0)
@@ -118,6 +135,7 @@ public class VoiceViewModel: ObservableObject {
             isVisible = false
             state = .idle
             statusMessage = ""
+            isVoiceNotRecognized = false
         }
     }
 

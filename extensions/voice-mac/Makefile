@@ -1,5 +1,5 @@
 SWIFTC = swiftc
-FLAGS = -O -framework AppKit -framework SwiftUI -framework AVFoundation -framework AudioToolbox
+FLAGS = -O -framework AppKit -framework SwiftUI -framework AVFoundation -framework AudioToolbox -framework LocalAuthentication
 SOURCES = src/AudioRecorder.swift \
           src/HotkeyListener.swift \
           src/DaemonClient.swift \

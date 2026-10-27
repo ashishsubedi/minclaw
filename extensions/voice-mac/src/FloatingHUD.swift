@@ -31,7 +31,9 @@ public struct FloatingHUDView: View {
                 NotchCenterBadge(
                     state: viewModel.state,
                     audioLevel: viewModel.audioLevel,
-                    statusMessage: viewModel.statusMessage
+                    statusMessage: viewModel.statusMessage,
+                    isVoiceNotRecognized: viewModel.isVoiceNotRecognized,
+                    onTouchIdUnlock: viewModel.onTouchIdUnlock
                 )
                 .frame(minWidth: 140)
 
@@ -68,6 +70,9 @@ public struct FloatingHUDView: View {
     }
 
     private var auraShadowColor: Color {
+        if viewModel.isVoiceNotRecognized {
+            return Color.red.opacity(0.65)
+        }
         switch viewModel.state {
         case .listening:
             return Color.cyan.opacity(0.55 + Double(viewModel.audioLevel) * 0.3)

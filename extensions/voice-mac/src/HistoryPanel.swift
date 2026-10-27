@@ -59,6 +59,52 @@ public struct HistoryPanelView: View {
             }
             .padding(.bottom, 2)
 
+            // Dynamic Unrecognized Voice Banner with Touch ID override
+            if viewModel.isVoiceNotRecognized {
+                VStack(spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.shield.fill")
+                            .foregroundColor(.yellow)
+                            .font(.system(size: 15))
+                        Text("🔒 Voice not recognized")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                    }
+                    Text("Utterance did not match enrolled owner voiceprint.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.75))
+                        .multilineTextAlignment(.center)
+                    Button(action: {
+                        viewModel.onTouchIdUnlock?()
+                    }) {
+                        HStack(spacing: 5) {
+                            Image(systemName: "touchid")
+                                .foregroundColor(.cyan)
+                                .font(.system(size: 12, weight: .bold))
+                            Text("Unlock with Touch ID (15 min)")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(.white)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(
+                            Capsule()
+                                .fill(Color.white.opacity(0.15))
+                                .overlay(Capsule().stroke(Color.cyan.opacity(0.6), lineWidth: 1))
+                        )
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.black.opacity(0.45))
+                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.5), lineWidth: 1))
+                )
+                .transition(.scale.combined(with: .opacity))
+            }
+
             // Conversation history list
             if viewModel.turns.isEmpty {
                 VStack(spacing: 8) {

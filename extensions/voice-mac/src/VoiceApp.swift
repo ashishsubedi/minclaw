@@ -2,6 +2,8 @@ import Foundation
 import AppKit
 import SwiftUI
 import Combine
+import LocalAuthentication
+import CoreGraphics
 
 public class VoicePanel: NSPanel {
     public var onEscape: (() -> Void)?
@@ -35,10 +37,25 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
     private var transcriber: Transcriber!
     private var daemonClient: DaemonClient!
     private var kokoroClient: KokoroClient!
-    private let tempAudioURL = URL(fileURLWithPath: "/tmp/minclaw_voice_input.wav")
+    private let tempAudioURL: URL = {
+        let stateDir = ProcessInfo.processInfo.environment["MINCLAW_STATE_DIR"] ?? "\(FileManager.default.homeDirectoryForCurrentUser.path)/.minclaw"
+        let tmpDir = "\(stateDir)/tmp"
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: tmpDir) {
+            try? fm.createDirectory(atPath: tmpDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        } else {
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tmpDir)
+        }
+        return URL(fileURLWithPath: "\(tmpDir)/voice_input.wav")
+    }()
 
     private var localKeyMonitor: Any?
     private var globalKeyMonitor: Any?
+    private var screenLockObserver: Any?
+    private var sessionResignObserver: Any?
+    private var isRecordingActive = false
+    private var voiceOverrideExpiry: Date? = nil
+    private var pendingPrompt: String? = nil
 
     private var mode: UIMode = .notch
     private var hotkeyType: HotkeyType = .rightOption
@@ -129,8 +146,90 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
 
     public func dismissAndStop() {
         print("[voice:app] 🛑 Dismissing UI and halting speech playback")
+        if isRecordingActive {
+            isRecordingActive = false
+            audioRecorder?.stopRecording()
+            try? FileManager.default.removeItem(at: tempAudioURL)
+        }
+        pendingPrompt = nil
         kokoroClient.stopPlayback()
         viewModel.dismiss(force: true)
+    }
+
+    public func handleScreenLocked() {
+        print("[voice:app] 🔒 Screen is locked! Cancelling active recording/playback and resetting HUD.")
+        hotkeyListener?.reset()
+        if isRecordingActive {
+            isRecordingActive = false
+            audioRecorder?.stopRecording()
+            try? FileManager.default.removeItem(at: tempAudioURL)
+        }
+        pendingPrompt = nil
+        kokoroClient.stopPlayback()
+        viewModel.clearSessionHistory()
+        viewModel.isVoiceNotRecognized = false
+        viewModel.dismiss(force: true)
+        window.orderOut(nil)
+    }
+
+    public func triggerTouchIdOverride() {
+        if let testTouchId = ProcessInfo.processInfo.environment["MINCLAW_TEST_TOUCHID"] {
+            if testTouchId == "1" || testTouchId.lowercased() == "true" {
+                handleTouchIdSuccess()
+                return
+            } else if testTouchId == "0" || testTouchId.lowercased() == "false" {
+                print("[voice:app] ❌ Mock Touch ID failed")
+                return
+            }
+        }
+
+        let context = LAContext()
+        var authError: NSError?
+        let policy: LAPolicy
+        if context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &authError) {
+            policy = .deviceOwnerAuthenticationWithBiometrics
+        } else if context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &authError) {
+            policy = .deviceOwnerAuthentication
+        } else {
+            print("[voice:app] ⚠️ Touch ID biometrics unavailable: \(String(describing: authError))")
+            return
+        }
+
+        context.evaluatePolicy(policy, localizedReason: "Unlock MinClaw Voice Companion") { [weak self] success, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                if success {
+                    print("[voice:app] ✅ Touch ID approved. Setting 15-minute voice override.")
+                    self.handleTouchIdSuccess()
+                } else {
+                    print("[voice:app] ❌ Touch ID failed or cancelled: \(String(describing: error))")
+                }
+            }
+        }
+    }
+
+    private func handleTouchIdSuccess() {
+        voiceOverrideExpiry = Date().addingTimeInterval(15 * 60)
+        viewModel.isVoiceNotRecognized = false
+        viewModel.statusMessage = ""
+        if let prompt = pendingPrompt {
+            pendingPrompt = nil
+            executePrompt(prompt)
+        } else {
+            viewModel.setIdle()
+        }
+    }
+
+    private func executePrompt(_ prompt: String) {
+        print("[voice:app] 🗣️ User said: \"\(prompt)\"")
+        viewModel.setThinking(prompt: prompt)
+
+        // Send message to MinClaw daemon
+        let sent = daemonClient.sendChatMessage(sessionId: "voice:macbook", text: prompt)
+        if !sent {
+            viewModel.addTurn(role: "assistant", text: "MinClaw daemon is offline. Run 'minclaw start' to boot it.")
+            viewModel.setIdle()
+        }
     }
 
     public func resetVoiceSession() {
@@ -164,9 +263,36 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Screen lock notification observers
+        screenLockObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.screenIsLocked"),
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleScreenLocked()
+        }
+
+        sessionResignObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleScreenLocked()
+        }
+
+        // Touch ID override callback from HUD
+        viewModel.onTouchIdUnlock = { [weak self] in
+            self?.triggerTouchIdOverride()
+        }
+
         // Push-to-talk press
         hotkeyListener.onPress = { [weak self] in
             guard let self = self else { return }
+            if isScreenLocked() {
+                print("[voice:app] 🔒 Screen is locked. Dropping hotkey press.")
+                return
+            }
+            self.isRecordingActive = true
             print("[voice:app] Key pressed -> Start recording")
 
             // Play earcon (Tink)
@@ -189,35 +315,64 @@ public class VoiceApp: NSObject, NSApplicationDelegate {
         // Push-to-talk release
         hotkeyListener.onRelease = { [weak self] in
             guard let self = self else { return }
-            print("[voice:app] Key released -> Stop recording & Transcribe")
+            if isScreenLocked() {
+                self.handleScreenLocked()
+                return
+            }
+            guard self.isRecordingActive else { return }
+            self.isRecordingActive = false
 
             // Play earcon (Pop)
             NSSound(named: "Pop")?.play()
 
             self.audioRecorder.stopRecording()
+            if FileManager.default.fileExists(atPath: self.tempAudioURL.path) {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: self.tempAudioURL.path)
+            }
             self.viewModel.setTranscribing()
 
-            // Run transcription in background
+            // Run transcription and speaker verification in background
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self = self else { return }
+                defer {
+                    // Crucial: Unlink/delete ~/.minclaw/tmp/voice_input.wav immediately after transcription or when cancelled.
+                    try? FileManager.default.removeItem(at: self.tempAudioURL)
+                }
+
+                if isScreenLocked() {
+                    DispatchQueue.main.async {
+                        self.handleScreenLocked()
+                    }
+                    return
+                }
+
                 let transcription = self.transcriber.transcribe(audioFileURL: self.tempAudioURL)
+                let verification = self.kokoroClient.verifySpeaker(audioPath: self.tempAudioURL.path)
 
                 DispatchQueue.main.async {
-                    let hasAlphanumeric = transcription?.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) ?? false
-                    if let prompt = transcription, !prompt.isEmpty, hasAlphanumeric {
-                        print("[voice:app] 🗣️ User said: \"\(prompt)\"")
-                        self.viewModel.setThinking(prompt: prompt)
+                    if isScreenLocked() {
+                        self.handleScreenLocked()
+                        return
+                    }
 
-                        // Send message to MinClaw daemon
-                        let sent = self.daemonClient.sendChatMessage(sessionId: "voice:macbook", text: prompt)
-                        if !sent {
-                            self.viewModel.addTurn(role: "assistant", text: "MinClaw daemon is offline. Run 'minclaw start' to boot it.")
-                            self.viewModel.setIdle()
-                        }
-                    } else {
+                    let hasAlphanumeric = transcription?.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) ?? false
+                    guard let prompt = transcription, !prompt.isEmpty, hasAlphanumeric else {
                         print("[voice:app] No speech detected")
                         self.viewModel.setIdle()
+                        return
                     }
+
+                    // Check Touch ID override TTL (15 min)
+                    let isOverrideValid = (self.voiceOverrideExpiry != nil && Date() < self.voiceOverrideExpiry!)
+                    if verification.enrolled && !verification.verified && !isOverrideValid {
+                        print("[voice:app] 🔒 Voice not recognized (score: \(verification.score)). Touch ID required.")
+                        self.pendingPrompt = prompt
+                        self.viewModel.setVoiceNotRecognized()
+                        return
+                    }
+
+                    // Verified or override active or unenrolled:
+                    self.executePrompt(prompt)
                 }
             }
         }

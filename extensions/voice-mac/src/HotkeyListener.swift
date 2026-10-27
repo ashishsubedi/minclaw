@@ -1,5 +1,23 @@
 import Foundation
 import AppKit
+import CoreGraphics
+
+public func isScreenLocked() -> Bool {
+    if let testLocked = ProcessInfo.processInfo.environment["MINCLAW_TEST_LOCKED"] {
+        if testLocked == "1" || testLocked.lowercased() == "true" { return true }
+        if testLocked == "0" || testLocked.lowercased() == "false" { return false }
+    }
+    guard let dict = CGSessionCopyCurrentDictionary() as? [String: Any] else {
+        return false
+    }
+    if let isLocked = dict["CGSSessionScreenIsLocked"] as? Bool {
+        return isLocked
+    }
+    if let isLockedNum = dict["CGSSessionScreenIsLocked"] as? NSNumber {
+        return isLockedNum.boolValue
+    }
+    return false
+}
 
 public enum HotkeyType: String {
     case rightOption = "right-option"
@@ -50,7 +68,18 @@ public class HotkeyListener {
         isKeyDown = false
     }
 
+    public func reset() {
+        isKeyDown = false
+    }
+
     private func handleFlagsChanged(_ event: NSEvent) {
+        if isScreenLocked() {
+            if isKeyDown {
+                isKeyDown = false
+            }
+            return
+        }
+
         let keyCode = event.keyCode
         let flags = event.modifierFlags
 
@@ -86,6 +115,9 @@ public class HotkeyListener {
 
         if matchesTarget {
             if active && !isKeyDown {
+                if isScreenLocked() {
+                    return
+                }
                 isKeyDown = true
                 DispatchQueue.main.async { [weak self] in
                     self?.onPress?()

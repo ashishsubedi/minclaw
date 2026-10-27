@@ -113,7 +113,7 @@ Commands:
   sessions      Interactive session browser (TUI)
   skills        List, sync, or install skills
   tool [sub]    Tool extensions controller (list, call <name> [k=v...])
-  voice [sub]   Voice companion for Mac (start, stop, status, build)
+  voice [sub]   Voice companion for Mac (start, stop, status, build, enroll)
   help          Show this help
 `);
     break;
