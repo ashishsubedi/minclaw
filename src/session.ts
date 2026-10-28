@@ -39,6 +39,13 @@ export type SessionMessage = {
  */
 
 export function getSessionDir(): string {
+  if (process.env.MINCLAW_SESSIONS_DIR) {
+    const dir = resolve(process.env.MINCLAW_SESSIONS_DIR);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    }
+    return dir;
+  }
   const config = loadConfig();
   const dir = resolve(config.sessions.dir);
   if (!existsSync(dir)) {

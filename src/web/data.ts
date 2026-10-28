@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { execSync } from "child_process";
+import os from "os";
 import JSON5 from "json5";
 import { getStateDir } from "../auth/credentials.ts";
 import { loadConfig, reloadConfig, type Config } from "../config.ts";
@@ -55,6 +56,91 @@ export type PermanentMemoryResult = {
   lastModified?: number;
 };
 
+export type TelemetrySnapshot = {
+  timestamp: number;
+  rssMb: number;
+  heapUsedMb: number;
+  heapTotalMb: number;
+  load1m: number;
+  totalTokens: number;
+};
+
+export type TelemetryData = {
+  process: {
+    pid?: number;
+    running: boolean;
+    uptimeSeconds: number;
+    formattedUptime: string;
+    socketPath: string;
+    socketExists: boolean;
+    stateDir: string;
+    bunVersion: string;
+    nodeVersion: string;
+    platform: string;
+    arch: string;
+  };
+  memory: {
+    rssMb: number;
+    heapTotalMb: number;
+    heapUsedMb: number;
+    heapUsedPercent: number;
+    externalMb: number;
+    arrayBuffersMb: number;
+    gcAvailable: boolean;
+  };
+  host: {
+    platform: string;
+    osRelease: string;
+    arch: string;
+    cpuModel: string;
+    cpuCores: number;
+    loadAverage: [number, number, number];
+    totalMemoryGb: number;
+    freeMemoryGb: number;
+    usedMemoryGb: number;
+    memoryUsagePercent: number;
+    systemUptimeSeconds: number;
+    formattedSystemUptime: string;
+  };
+  tokens: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+    cacheHitRate: number;
+    costTotal: number;
+    costSource: "catalog" | "estimated-openai" | "unavailable";
+  };
+  models: {
+    primary: {
+      provider: string;
+      name: string;
+    };
+    fallbacks: Array<{ provider: string; name: string }>;
+    watermarkLimit: number;
+  };
+  traffic: {
+    totalSessions: number;
+    totalMessages: number;
+    compactedSessionsCount: number;
+    channels: Record<string, { sessions: number; messages: number; tokens: number; cost: number }>;
+  };
+  subsystems: {
+    heartbeat: {
+      enabled: boolean;
+      cronExpr: string;
+      status: ReturnType<typeof getHeartbeatStatus>;
+    };
+    scheduler: {
+      totalJobs: number;
+      jobs: ScheduledJob[];
+    };
+    extensions: ExtensionSummary[];
+  };
+  history: TelemetrySnapshot[];
+};
+
 export type DashboardOverview = {
   daemon: {
     running: boolean;
@@ -62,6 +148,12 @@ export type DashboardOverview = {
     socketExists: boolean;
     stateDir: string;
     memoryRssMb?: number;
+    heapUsedMb?: number;
+    heapTotalMb?: number;
+    cpuLoad?: number[];
+    cpuModel?: string;
+    cpuCount?: number;
+    hostMemUsagePercent?: number;
     uptimeSeconds?: number;
   };
   config: Config;
@@ -85,6 +177,9 @@ type RawUsage = SessionMessage["usage"];
 const CONFIG_PATH = resolve(import.meta.dir, "..", "..", "minclaw.json5");
 
 function getSessionDir(): string {
+  if (process.env.MINCLAW_SESSIONS_DIR) {
+    return resolve(process.env.MINCLAW_SESSIONS_DIR);
+  }
   return resolve(loadConfig().sessions.dir);
 }
 
@@ -210,7 +305,7 @@ export function getDashboardSession(sessionKey: string): SessionDetail | null {
   const dir = getSessionDir();
   const filePath = join(dir, `${sessionKey}.jsonl`);
   if (!existsSync(filePath)) {
-    if (sessionKey.startsWith("web:") || sessionKey.startsWith("telegram:") || sessionKey.startsWith("whatsapp:") || sessionKey.startsWith("voice:")) {
+    if (sessionKey.startsWith("web:") || sessionKey.startsWith("telegram:") || sessionKey.startsWith("whatsapp:") || sessionKey.startsWith("voice:") || sessionKey.startsWith("terminal:")) {
       const idx = sessionKey.indexOf(":");
       return {
         key: sessionKey,
@@ -345,6 +440,51 @@ export function getTemporaryMemoryContent(): PermanentMemoryResult {
   };
 }
 
+function formatDuration(seconds: number): string {
+  const s = Math.floor(seconds);
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+const MAX_SNAPSHOTS = 30;
+const telemetryHistory: TelemetrySnapshot[] = [];
+
+export function recordTelemetrySnapshot(
+  rssMb: number,
+  heapUsedMb: number,
+  heapTotalMb: number,
+  load1m: number,
+  totalTokens: number
+) {
+  const now = Date.now();
+  const last = telemetryHistory[telemetryHistory.length - 1];
+  if (last && now - last.timestamp < 1500) {
+    last.rssMb = rssMb;
+    last.heapUsedMb = heapUsedMb;
+    last.heapTotalMb = heapTotalMb;
+    last.load1m = load1m;
+    last.totalTokens = totalTokens;
+    return;
+  }
+  telemetryHistory.push({
+    timestamp: now,
+    rssMb,
+    heapUsedMb,
+    heapTotalMb,
+    load1m,
+    totalTokens,
+  });
+  if (telemetryHistory.length > MAX_SNAPSHOTS) {
+    telemetryHistory.shift();
+  }
+}
+
 export async function getDashboardOverview(): Promise<DashboardOverview> {
   const sessions = listDashboardSessions();
   const skills = await getAllSkillStatuses();
@@ -369,9 +509,15 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     }
   );
 
-  const rssMb = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10;
+  const mem = process.memoryUsage();
+  const rssMb = Math.round((mem.rss / (1024 * 1024)) * 10) / 10;
+  const heapTotalMb = Math.round((mem.heapTotal / (1024 * 1024)) * 10) / 10;
+  const heapUsedMb = Math.round((mem.heapUsed / (1024 * 1024)) * 10) / 10;
   const uptimeSeconds = Math.round(process.uptime());
   const extensions = getExtensionsStatus();
+  const loadAvg = os.loadavg().map((v) => Math.round(v * 100) / 100);
+
+  recordTelemetrySnapshot(rssMb, heapUsedMb, heapTotalMb, loadAvg[0] ?? 0, sessionsUsage.totalTokens);
 
   return {
     daemon: {
@@ -380,7 +526,13 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
       socketExists: existsSync(join(getStateDir(), SOCKET_FILENAME)),
       stateDir: getStateDir(),
       memoryRssMb: rssMb,
+      heapUsedMb,
+      heapTotalMb,
       uptimeSeconds,
+      cpuLoad: loadAvg,
+      cpuModel: os.cpus()[0]?.model || "Host CPU",
+      cpuCount: os.cpus().length,
+      hostMemUsagePercent: Math.round(((os.totalmem() - os.freemem()) / os.totalmem()) * 100),
     },
     config: loadConfig(),
     sessions: {
@@ -392,6 +544,167 @@ export async function getDashboardOverview(): Promise<DashboardOverview> {
     skills,
     heartbeat: getHeartbeatStatus(),
     extensions,
+  };
+}
+
+export async function getTelemetryData(): Promise<TelemetryData> {
+  const mem = process.memoryUsage();
+  const rssMb = Math.round((mem.rss / (1024 * 1024)) * 10) / 10;
+  const heapTotalMb = Math.round((mem.heapTotal / (1024 * 1024)) * 10) / 10;
+  const heapUsedMb = Math.round((mem.heapUsed / (1024 * 1024)) * 10) / 10;
+  const heapUsedPercent = heapTotalMb > 0 ? Math.round((heapUsedMb / heapTotalMb) * 100) : 0;
+  const externalMb = Math.round((mem.external / (1024 * 1024)) * 10) / 10;
+  const arrayBuffersMb = Math.round(((mem.arrayBuffers || 0) / (1024 * 1024)) * 10) / 10;
+
+  const loadAvg = os.loadavg().map((v) => Math.round(v * 100) / 100) as [number, number, number];
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const usedMem = totalMem - freeMem;
+  const totalMemoryGb = Math.round((totalMem / (1024 * 1024 * 1024)) * 10) / 10;
+  const freeMemoryGb = Math.round((freeMem / (1024 * 1024 * 1024)) * 10) / 10;
+  const usedMemoryGb = Math.round((usedMem / (1024 * 1024 * 1024)) * 10) / 10;
+  const memoryUsagePercent = Math.round((usedMem / totalMem) * 100);
+
+  const sessions = listDashboardSessions();
+  const sessionDir = getSessionDir();
+  let compactedSessionsCount = 0;
+  let totalMessages = 0;
+
+  const channels: Record<string, { sessions: number; messages: number; tokens: number; cost: number }> = {};
+
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cacheReadTokens = 0;
+  let cacheWriteTokens = 0;
+  let totalTokens = 0;
+  let costTotal = 0;
+  let costSource: "catalog" | "estimated-openai" | "unavailable" = "unavailable";
+
+  for (const s of sessions) {
+    totalMessages += s.messageCount;
+    inputTokens += s.usage.input;
+    outputTokens += s.usage.output;
+    cacheReadTokens += s.usage.cacheRead;
+    cacheWriteTokens += s.usage.cacheWrite;
+    totalTokens += s.usage.totalTokens;
+    costTotal += s.usage.costTotal;
+    if (s.usage.costSource !== "unavailable") {
+      costSource = s.usage.costSource;
+    }
+
+    const ch = s.channel || "other";
+    if (!channels[ch]) {
+      channels[ch] = { sessions: 0, messages: 0, tokens: 0, cost: 0 };
+    }
+    channels[ch].sessions += 1;
+    channels[ch].messages += s.messageCount;
+    channels[ch].tokens += s.usage.totalTokens;
+    channels[ch].cost += s.usage.costTotal;
+
+    const compactedPath = join(sessionDir, `${s.key}.compacted.json`);
+    if (existsSync(compactedPath)) {
+      compactedSessionsCount += 1;
+    }
+  }
+
+  const cacheDenom = inputTokens + cacheReadTokens;
+  const cacheHitRate = cacheDenom > 0 ? Math.round((cacheReadTokens / cacheDenom) * 1000) / 10 : 0;
+
+  recordTelemetrySnapshot(rssMb, heapUsedMb, heapTotalMb, loadAvg[0] ?? 0, totalTokens);
+
+  const config = loadConfig();
+  const uptimeSeconds = Math.round(process.uptime());
+  const sysUptimeSeconds = Math.round(os.uptime());
+
+  return {
+    process: {
+      pid: readDaemonPid() ?? process.pid,
+      running: isDaemonRunning(),
+      uptimeSeconds,
+      formattedUptime: formatDuration(uptimeSeconds),
+      socketPath: join(getStateDir(), SOCKET_FILENAME),
+      socketExists: existsSync(join(getStateDir(), SOCKET_FILENAME)),
+      stateDir: getStateDir(),
+      bunVersion: typeof Bun !== "undefined" ? Bun.version : "1.3.14",
+      nodeVersion: process.version,
+      platform: os.platform(),
+      arch: os.arch(),
+    },
+    memory: {
+      rssMb,
+      heapTotalMb,
+      heapUsedMb,
+      heapUsedPercent,
+      externalMb,
+      arrayBuffersMb,
+      gcAvailable: typeof (Bun as any).gc === "function",
+    },
+    host: {
+      platform: os.platform(),
+      osRelease: os.release(),
+      arch: os.arch(),
+      cpuModel: os.cpus()[0]?.model || "Apple Silicon / Host CPU",
+      cpuCores: os.cpus().length,
+      loadAverage: loadAvg,
+      totalMemoryGb,
+      freeMemoryGb,
+      usedMemoryGb,
+      memoryUsagePercent,
+      systemUptimeSeconds: sysUptimeSeconds,
+      formattedSystemUptime: formatDuration(sysUptimeSeconds),
+    },
+    tokens: {
+      input: inputTokens,
+      output: outputTokens,
+      cacheRead: cacheReadTokens,
+      cacheWrite: cacheWriteTokens,
+      totalTokens,
+      cacheHitRate,
+      costTotal: Math.round(costTotal * 10000) / 10000,
+      costSource,
+    },
+    models: {
+      primary: {
+        provider: config.model.provider,
+        name: config.model.name,
+      },
+      fallbacks: config.model.fallbacks || [],
+      watermarkLimit: 75000,
+    },
+    traffic: {
+      totalSessions: sessions.length,
+      totalMessages,
+      compactedSessionsCount,
+      channels,
+    },
+    subsystems: {
+      heartbeat: {
+        enabled: config.heartbeat?.enabled ?? true,
+        cronExpr: config.heartbeat?.cronExpr || "*/15 * * * *",
+        status: getHeartbeatStatus(),
+      },
+      scheduler: {
+        totalJobs: listJobs().length,
+        jobs: listJobs(),
+      },
+      extensions: getExtensionsStatus(),
+    },
+    history: [...telemetryHistory],
+  };
+}
+
+export function runGarbageCollection(): { ok: boolean; beforeRssMb: number; afterRssMb: number; freedMb: number } {
+  const beforeRssMb = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10;
+  if (typeof (Bun as any).gc === "function") {
+    (Bun as any).gc(true);
+  }
+  const afterRssMb = Math.round((process.memoryUsage().rss / (1024 * 1024)) * 10) / 10;
+  const freedMb = Math.max(0, Math.round((beforeRssMb - afterRssMb) * 10) / 10);
+  return {
+    ok: true,
+    beforeRssMb,
+    afterRssMb,
+    freedMb,
   };
 }
 

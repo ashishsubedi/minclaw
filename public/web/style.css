@@ -129,16 +129,23 @@ html, body {
 .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grid-cols-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .grid-split-overview { grid-template-columns: 1.4fr 1fr; }
 .grid-split-sessions { grid-template-columns: 310px 1fr; }
+
+@media (max-width: 1200px) {
+  .grid-cols-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 
 @media (max-width: 1024px) {
   .grid-split-overview { grid-template-columns: 1fr; }
   .grid-split-sessions { grid-template-columns: 1fr; }
   .grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid-cols-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 640px) {
+  .grid-cols-5 { grid-template-columns: 1fr; }
   .grid-cols-4 { grid-template-columns: 1fr; }
   .grid-cols-3 { grid-template-columns: 1fr; }
   .grid-cols-2 { grid-template-columns: 1fr; }
@@ -973,4 +980,63 @@ html, body {
   font-size: 12px;
   text-align: left;
 }
+
+/* Background Color Utilities */
+.bg-blue { background-color: var(--accent-blue); }
+.bg-green { background-color: var(--color-green); }
+.bg-amber { background-color: var(--color-amber); }
+.bg-red { background-color: var(--color-red); }
+.bg-purple { background-color: var(--color-purple); }
+
+/* Progress Bars */
+.progress-track {
+  width: 100%;
+  height: 6px;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.fill-amber { background-color: var(--color-amber); }
+.fill-blue { background-color: var(--accent-blue); }
+.fill-green { background-color: var(--color-green); }
+.fill-purple { background-color: var(--color-purple); }
+
+/* Telemetry Charts & Details */
+.telemetry-chart-box {
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+}
+.telemetry-chart-svg {
+  width: 100%;
+  height: 140px;
+  display: block;
+}
+.telemetry-indicator-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.telemetry-table-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
+}
+.telemetry-table-row:last-child {
+  border-bottom: none;
+}
+
 

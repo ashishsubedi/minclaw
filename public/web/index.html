@@ -47,7 +47,16 @@
             <span id="navSessionCount" class="badge font-mono text-xs">0</span>
           </button>
 
-          <!-- 3. Memory -->
+          <!-- 3. Telemetry & Vitals -->
+          <button data-tab="telemetry" class="nav-btn">
+            <span class="flex items-center gap-2.5">
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg>
+              <span>Telemetry</span>
+            </span>
+            <span id="navTelemetryBadge" class="badge badge-amber font-mono text-xs">Live</span>
+          </button>
+
+          <!-- 4. Memory -->
           <button data-tab="memory" class="nav-btn">
             <span class="flex items-center gap-2.5">
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
@@ -168,13 +177,16 @@
                 <div id="statTotalTokens" class="text-xs text-green font-mono">0 tokens</div>
               </div>
 
-              <div class="card p-4 space-y-1 cursor-pointer" onclick="openExtensionManager()">
+              <div class="card p-4 space-y-1 cursor-pointer" onclick="switchTab('telemetry')">
                 <div class="flex justify-between items-center text-xs text-muted">
                   <span>Process Vitals</span>
-                  <span class="text-blue font-medium">Telemetry & Extensions →</span>
+                  <span class="text-blue font-medium">Telemetry →</span>
                 </div>
                 <div id="statMemoryRss" class="text-2xl font-bold text-amber font-mono tabular-nums">-- MB</div>
-                <div id="statUptime" class="text-xs text-amber font-mono">Uptime: --</div>
+                <div class="flex justify-between items-center text-xs text-amber font-mono">
+                  <span id="statUptime">Uptime: --</span>
+                  <span id="statHeap" class="text-muted">Heap: --</span>
+                </div>
               </div>
 
               <div class="card p-4 space-y-1 cursor-pointer" onclick="switchTab('sessions')">
@@ -320,6 +332,334 @@
               </div>
 
             </div>
+          </section>
+
+          <!-- ================= TELEMETRY ================= -->
+          <section id="page-telemetry" class="hidden space-y-6">
+            <!-- Header & Action Controls -->
+            <div class="flex items-center justify-between pb-3 border-b">
+              <div>
+                <h2 class="text-base font-bold text-white">Telemetry & System Vitals</h2>
+                <p class="text-xs text-muted mt-0.5">Real-time resource utilization, process telemetry, memory allocation, and AI engine metrics</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button id="btnTelemetryLiveToggle" class="btn btn-sm flex items-center gap-1.5" onclick="toggleTelemetryAutoRefresh()">
+                  <span id="telemetryLiveDot" class="status-dot dot-green"></span>
+                  <span id="telemetryLiveLabel">Live: 3s</span>
+                </button>
+                <button id="btnTelemetryGc" class="btn btn-sm" onclick="triggerGarbageCollection()">
+                  ⚡ Run GC
+                </button>
+                <button class="btn btn-sm" onclick="loadTelemetry()">
+                  🔄 Refresh
+                </button>
+              </div>
+            </div>
+
+            <!-- 5-Card Top Metrics Row -->
+            <div class="grid grid-cols-5 gap-4">
+              <!-- 1. Process Memory (RSS & Heap) -->
+              <div class="card p-4 space-y-1">
+                <div class="flex justify-between items-center text-xs text-muted">
+                  <span>Process RSS</span>
+                  <span class="text-amber font-mono font-medium">Heap: <span id="telemetryHeapUsed">--</span> MB</span>
+                </div>
+                <div id="telemetryRss" class="text-2xl font-bold text-amber font-mono tabular-nums">-- MB</div>
+                <div class="space-y-1 pt-1">
+                  <div class="flex justify-between text-xs text-muted font-mono">
+                    <span>Heap Used:</span>
+                    <span id="telemetryHeapPct" class="text-amber font-semibold">--%</span>
+                  </div>
+                  <div class="progress-track">
+                    <div id="telemetryHeapProgress" class="progress-fill fill-amber" style="width: 0%;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 2. CPU & Host Load -->
+              <div class="card p-4 space-y-1">
+                <div class="flex justify-between items-center text-xs text-muted">
+                  <span>CPU Load (1m)</span>
+                  <span id="telemetryCpuCoresBadge" class="badge badge-blue font-mono text-xs">-- Cores</span>
+                </div>
+                <div id="telemetryLoad1m" class="text-2xl font-bold text-white font-mono tabular-nums">--</div>
+                <div class="space-y-1 pt-1">
+                  <div class="text-xs text-muted font-mono flex justify-between">
+                    <span>5m / 15m Load:</span>
+                    <span id="telemetryLoadSub" class="text-dim">-- / --</span>
+                  </div>
+                  <div id="telemetryCpuModel" class="text-xs text-muted truncate">Apple Silicon</div>
+                </div>
+              </div>
+
+              <!-- 3. Host System RAM -->
+              <div class="card p-4 space-y-1">
+                <div class="flex justify-between items-center text-xs text-muted">
+                  <span>Host RAM</span>
+                  <span id="telemetryHostMemTotal" class="text-blue font-mono font-medium">-- GB Total</span>
+                </div>
+                <div id="telemetryHostMemUsed" class="text-2xl font-bold text-white font-mono tabular-nums">-- GB</div>
+                <div class="space-y-1 pt-1">
+                  <div class="flex justify-between text-xs text-muted font-mono">
+                    <span>Memory Used:</span>
+                    <span id="telemetryHostMemPct" class="text-blue font-semibold">--%</span>
+                  </div>
+                  <div class="progress-track">
+                    <div id="telemetryHostMemProgress" class="progress-fill fill-blue" style="width: 0%;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 4. AI Tokens & Prompt Cache -->
+              <div class="card p-4 space-y-1">
+                <div class="flex justify-between items-center text-xs text-muted">
+                  <span>Total Tokens</span>
+                  <span id="telemetryCostBadge" class="text-green font-mono font-medium">$0.0000</span>
+                </div>
+                <div id="telemetryTokensTotal" class="text-2xl font-bold text-green font-mono tabular-nums">0</div>
+                <div class="space-y-1 pt-1">
+                  <div class="flex justify-between text-xs text-muted font-mono">
+                    <span>Cache Hit Rate:</span>
+                    <span id="telemetryCacheHitRate" class="text-green font-semibold">0.0%</span>
+                  </div>
+                  <div class="progress-track">
+                    <div id="telemetryCacheHitProgress" class="progress-fill fill-green" style="width: 0%;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 5. Daemon Vitals & Socket -->
+              <div class="card p-4 space-y-1">
+                <div class="flex justify-between items-center text-xs text-muted">
+                  <span>Daemon Vitals</span>
+                  <span id="telemetryDaemonDot" class="status-dot dot-green"></span>
+                </div>
+                <div id="telemetryPid" class="text-2xl font-bold text-white font-mono tabular-nums">PID --</div>
+                <div class="space-y-1 pt-1 text-xs text-muted font-mono">
+                  <div class="flex justify-between">
+                    <span>Uptime:</span>
+                    <span id="telemetryUptime" class="text-white">--</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span>Socket:</span>
+                    <span id="telemetrySocketStatus" class="text-green">Active</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Visual Charts & Activity Row (2 Columns) -->
+            <div class="grid grid-cols-2 gap-6">
+              
+              <!-- LEFT: Memory Profile Timeline Chart -->
+              <div class="card p-5 space-y-4">
+                <div class="flex items-center justify-between pb-2 border-b">
+                  <div class="space-y-0.5">
+                    <div class="font-bold text-sm text-white">Process Memory Profile & Heap Allocation</div>
+                    <div class="text-xs text-muted">Live memory footprint (RSS vs Heap Used) sampled over time</div>
+                  </div>
+                  <div class="flex items-center gap-3 text-xs font-mono">
+                    <span class="telemetry-legend-item"><span class="telemetry-indicator-dot bg-amber"></span> RSS</span>
+                    <span class="telemetry-legend-item"><span class="telemetry-indicator-dot bg-blue"></span> Heap</span>
+                  </div>
+                </div>
+
+                <div class="telemetry-chart-box">
+                  <svg id="telemetryMemoryChart" class="telemetry-chart-svg" viewBox="0 0 500 130" preserveAspectRatio="none">
+                    <!-- Dynamically rendered SVG paths & grid -->
+                  </svg>
+                </div>
+
+                <div class="grid grid-cols-3 gap-3 font-mono text-xs">
+                  <div class="card-subtle p-2.5 text-center">
+                    <div class="text-muted">Peak RSS</div>
+                    <div id="chartPeakRss" class="text-white font-bold text-sm tabular-nums mt-0.5">-- MB</div>
+                  </div>
+                  <div class="card-subtle p-2.5 text-center">
+                    <div class="text-muted">Current RSS</div>
+                    <div id="chartCurrentRss" class="text-amber font-bold text-sm tabular-nums mt-0.5">-- MB</div>
+                  </div>
+                  <div class="card-subtle p-2.5 text-center">
+                    <div class="text-muted">Baseline Heap</div>
+                    <div id="chartBaselineHeap" class="text-blue font-bold text-sm tabular-nums mt-0.5">-- MB</div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- RIGHT: Token Throughput & Caching Breakdown -->
+              <div class="card p-5 space-y-4">
+                <div class="flex items-center justify-between pb-2 border-b">
+                  <div class="space-y-0.5">
+                    <div class="font-bold text-sm text-white">Token Throughput & Prompt Caching Efficiency</div>
+                    <div class="text-xs text-muted">Composition of generated, input, and cached model interactions</div>
+                  </div>
+                  <span id="telemetryCostSourceBadge" class="badge badge-green font-mono text-xs">Catalog Pricing</span>
+                </div>
+
+                <!-- Segmented Stacked Bar -->
+                <div class="space-y-2">
+                  <div class="flex justify-between items-center text-xs font-mono">
+                    <span class="text-muted">Token Composition:</span>
+                    <span id="tokenBarTotal" class="text-white font-bold tabular-nums">0 tokens</span>
+                  </div>
+                  <div class="progress-track" style="height: 12px; display: flex;">
+                    <div id="tokenBarInput" class="h-full bg-blue" style="width: 25%;" title="Input Tokens"></div>
+                    <div id="tokenBarCacheRead" class="h-full bg-green" style="width: 50%;" title="Cache Read (Hit)"></div>
+                    <div id="tokenBarOutput" class="h-full bg-purple" style="width: 15%;" title="Output Tokens"></div>
+                    <div id="tokenBarCacheWrite" class="h-full bg-amber" style="width: 10%;" title="Cache Write"></div>
+                  </div>
+                  <div class="flex justify-between items-center text-xs font-mono text-muted pt-1">
+                    <span class="telemetry-legend-item"><span class="telemetry-indicator-dot bg-blue"></span> Input: <span id="tokenLegendInput" class="text-white font-bold">0</span></span>
+                    <span class="telemetry-legend-item"><span class="telemetry-indicator-dot bg-green"></span> Cached: <span id="tokenLegendCacheRead" class="text-white font-bold">0</span></span>
+                    <span class="telemetry-legend-item"><span class="telemetry-indicator-dot bg-purple"></span> Output: <span id="tokenLegendOutput" class="text-white font-bold">0</span></span>
+                    <span class="telemetry-legend-item"><span class="telemetry-indicator-dot bg-amber"></span> New Cache: <span id="tokenLegendCacheWrite" class="text-white font-bold">0</span></span>
+                  </div>
+                </div>
+
+                <!-- Prompt Caching Metrics Callout -->
+                <div class="card-subtle p-3.5 space-y-2 font-mono text-xs">
+                  <div class="flex justify-between items-center">
+                    <span class="text-muted">Prompt Caching Effectiveness:</span>
+                    <span id="telemetryCacheSavedPct" class="text-green font-bold">0.0% Cache Hit Rate</span>
+                  </div>
+                  <div class="text-xs text-dim leading-relaxed">
+                    Cached prompt tokens drastically reduce roundtrip latency and inference cost on repeated turns with permanent memory and skill context.
+                  </div>
+                  <div class="flex justify-between items-center pt-1 border-t text-xs">
+                    <span class="text-muted">Watermark Compaction Ceiling:</span>
+                    <span class="badge badge-amber font-mono">75,000 tokens</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Detailed Telemetry Subsystems Grid (4 Cards) -->
+            <div class="grid grid-cols-2 gap-6">
+
+              <!-- Detail 1: Runtime & Memory Allocations -->
+              <div class="card p-5 space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b">
+                  <span class="font-bold text-sm text-white">Runtime & Memory Allocation Details</span>
+                  <span class="badge badge-blue font-mono text-xs">Bun Native</span>
+                </div>
+                <div class="space-y-1 font-mono">
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Resident Set Size (RSS):</span>
+                    <span id="detailRss" class="text-white font-bold tabular-nums">-- MB</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Heap Used / Total:</span>
+                    <span id="detailHeap" class="text-white tabular-nums">-- / -- MB</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">External Memory:</span>
+                    <span id="detailExternal" class="text-white tabular-nums">-- MB</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">ArrayBuffers Allocation:</span>
+                    <span id="detailArrayBuffers" class="text-white tabular-nums">-- MB</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Runtime Engine:</span>
+                    <span id="detailBunVersion" class="text-green font-bold">Bun v--</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Host OS & Architecture:</span>
+                    <span id="detailHostOs" class="text-white">--</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">State Directory & Socket:</span>
+                    <span id="detailStateDir" class="text-dim truncate">~/.minclaw</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Detail 2: AI Model Cascade & Invocations -->
+              <div class="card p-5 space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b">
+                  <span class="font-bold text-sm text-white">AI Model Cascade & Execution Strategy</span>
+                  <span id="detailPrimaryProvider" class="badge badge-purple font-mono text-xs">Primary</span>
+                </div>
+                <div class="space-y-1 font-mono">
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Primary Active Model:</span>
+                    <span id="detailPrimaryModel" class="text-purple font-bold">--</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Model Fallback Chain:</span>
+                    <span id="detailFallbackChain" class="text-white text-right">--</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Total Session Turns:</span>
+                    <span id="detailTotalTurns" class="text-white tabular-nums">--</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Estimated Total Spend:</span>
+                    <span id="detailSpend" class="text-green font-bold tabular-nums">$0.0000</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Compaction Threshold:</span>
+                    <span class="text-white tabular-nums">16 turns (keep 8)</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Tool Loop Budget:</span>
+                    <span class="text-white tabular-nums">15 iterations max</span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Detail 3: Channel Traffic & Compaction -->
+              <div class="card p-5 space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b">
+                  <span class="font-bold text-sm text-white">Channel Traffic & Compaction Telemetry</span>
+                  <span id="detailChannelsCountBadge" class="badge badge-green font-mono text-xs">-- Channels</span>
+                </div>
+                <div id="telemetryChannelsContainer" class="space-y-1 font-mono">
+                  <!-- Dynamically populated with channel breakdown -->
+                </div>
+                <div class="card-subtle p-3 flex justify-between items-center text-xs font-mono mt-2">
+                  <span class="text-muted">Compacted Sidecars Active:</span>
+                  <span id="detailCompactedCount" class="text-amber font-bold">0 sessions</span>
+                </div>
+              </div>
+
+              <!-- Detail 4: Daemon Subsystems & Native Extensions -->
+              <div class="card p-5 space-y-3">
+                <div class="flex items-center justify-between pb-2 border-b">
+                  <span class="font-bold text-sm text-white">Subsystems & Companion Extensions</span>
+                  <span class="badge badge-green font-mono text-xs">Healthy</span>
+                </div>
+                <div class="space-y-1 font-mono">
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">voice-mac HUD Companion:</span>
+                    <span id="detailExtVoiceStatus" class="text-green font-bold">--</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Speech Recognition Engine:</span>
+                    <span class="text-white">MLX Whisper (MPS 4-bit)</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Speech Synthesis Engine:</span>
+                    <span class="text-white">Kokoro-82M (af_heart, 45s guard)</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Heartbeat Scheduler:</span>
+                    <span id="detailHeartbeatSchedule" class="text-white">*/15 * * * * (Enabled)</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Reflex Zero-Token Triage:</span>
+                    <span class="text-green">0-10 Attention Scoring Active</span>
+                  </div>
+                  <div class="telemetry-table-row">
+                    <span class="text-muted">Autonomous Self-Improvement:</span>
+                    <span class="text-white">5+5 Step Budget Enforced</span>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
           </section>
 
           <!-- ================= 3. MEMORY ================= -->

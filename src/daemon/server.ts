@@ -163,10 +163,18 @@ async function handleClientMessage(
     case "chat": {
       clients.set(socket, msg.sessionId);
 
+      let channel: IncomingMessage["channel"] = "terminal";
+      let sender = msg.sessionId;
+      const colonIdx = msg.sessionId.indexOf(":");
+      if (colonIdx > 0) {
+        channel = msg.sessionId.slice(0, colonIdx) as IncomingMessage["channel"];
+        sender = msg.sessionId.slice(colonIdx + 1);
+      }
+
       const incoming: IncomingMessage = {
-        channel: "terminal",
-        sender: msg.sessionId,
-        senderName: msg.sessionId,
+        channel,
+        sender,
+        senderName: sender,
         text: msg.text,
         timestamp: Date.now(),
       };
@@ -204,15 +212,23 @@ async function handleClientMessage(
     case "command": {
       clients.set(socket, msg.sessionId);
 
+      let channel: IncomingMessage["channel"] = "terminal";
+      let sender = msg.sessionId;
+      const colonIdx = msg.sessionId.indexOf(":");
+      if (colonIdx > 0) {
+        channel = msg.sessionId.slice(0, colonIdx) as IncomingMessage["channel"];
+        sender = msg.sessionId.slice(colonIdx + 1);
+      }
+
       // Route commands through the router as if they were messages
       const commandText = msg.args
         ? `${msg.command} ${msg.args}`
         : msg.command;
 
       const incoming: IncomingMessage = {
-        channel: "terminal",
-        sender: msg.sessionId,
-        senderName: msg.sessionId,
+        channel,
+        sender,
+        senderName: sender,
         text: commandText,
         timestamp: Date.now(),
       };
@@ -241,7 +257,7 @@ async function handleClientMessage(
     }
 
     case "tool_call": {
-      const sessionKey = msg.sessionKey || "terminal:voice_macbook";
+      const sessionKey = msg.sessionKey || "voice:macbook";
       clients.set(socket, sessionKey);
       const colonIdx = sessionKey.indexOf(":");
       const toolContext =
@@ -256,6 +272,7 @@ async function handleClientMessage(
         const res = await executeTool(msg.tool, msg.args || {}, toolContext);
         if (msg.tool === "session_reset") {
           notifySessionCleared("voice:macbook");
+          notifySessionCleared("terminal:voice_macbook");
           notifySessionCleared(sessionKey);
         }
         socket.write(

@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { Type } from "@sinclair/typebox";
-import { mkdirSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, mkdtempSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -258,6 +258,25 @@ describe("CLI Tool Controller (src/cli/tool-ctl.ts)", () => {
 
 describe("session_reset Tool", () => {
   const testKey = "test_tool_session_reset_key";
+  let tempSessionsDir: string;
+  let originalSessionsDir: string | undefined;
+
+  beforeAll(() => {
+    tempSessionsDir = mkdtempSync(join(tmpdir(), "minclaw-test-sessions-"));
+    originalSessionsDir = process.env.MINCLAW_SESSIONS_DIR;
+    process.env.MINCLAW_SESSIONS_DIR = tempSessionsDir;
+  });
+
+  afterAll(() => {
+    if (originalSessionsDir !== undefined) {
+      process.env.MINCLAW_SESSIONS_DIR = originalSessionsDir;
+    } else {
+      delete process.env.MINCLAW_SESSIONS_DIR;
+    }
+    try {
+      rmSync(tempSessionsDir, { recursive: true, force: true });
+    } catch {}
+  });
 
   test("clears persisted session messages and returns confirmation", async () => {
     appendMessage(testKey, {
@@ -300,10 +319,10 @@ describe("session_reset Tool", () => {
     expect(getMessages(contextSessionKey).length).toBe(0);
   });
 
-  test("defaults to terminal:voice_macbook when neither args nor context are provided", async () => {
+  test("defaults to voice:macbook when neither args nor context are provided", async () => {
     const result = await executeSessionReset({});
     expect(result.isError).toBe(false);
-    expect(result.content[0]?.text).toBe("Session terminal:voice_macbook cleared.");
+    expect(result.content[0]?.text).toBe("Session voice:macbook cleared.");
   });
 });
 

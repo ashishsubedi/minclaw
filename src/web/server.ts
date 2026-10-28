@@ -18,6 +18,8 @@ import {
   getExtensionsStatus,
   getPermanentMemoryContent,
   getTemporaryMemoryContent,
+  getTelemetryData,
+  runGarbageCollection,
   saveDashboardConfig,
   searchDashboardMemory,
 } from "./data.ts";
@@ -228,6 +230,14 @@ async function serveStatic(pathname: string): Promise<Response> {
 async function handleApi(req: Request, url: URL): Promise<Response> {
   if (req.method === "GET" && url.pathname === "/api/overview") {
     return json(await getDashboardOverview());
+  }
+
+  if (req.method === "GET" && url.pathname === "/api/telemetry") {
+    return json(await getTelemetryData());
+  }
+
+  if (req.method === "POST" && url.pathname === "/api/telemetry/gc") {
+    return json(runGarbageCollection());
   }
 
   if (req.method === "GET" && url.pathname === "/api/memory/permanent") {

@@ -1462,9 +1462,14 @@ export async function executeSessionReset(
       args.sessionKey ||
       (context?.channel && context?.sender
         ? sessionKeyFromMessage(context.channel, context.sender)
-        : "terminal:voice_macbook");
+        : "voice:macbook");
 
     clearSession(targetKey);
+    if (targetKey === "voice:macbook") {
+      clearSession("terminal:voice_macbook");
+    } else if (targetKey === "terminal:voice_macbook") {
+      clearSession("voice:macbook");
+    }
 
     try {
       const { clearAgySession } = await import("./agent.ts");

@@ -10,7 +10,7 @@ export type Attachment = {
 };
 
 export type IncomingMessage = {
-  channel: "telegram" | "whatsapp" | "slack" | "terminal" | "web";
+  channel: "telegram" | "whatsapp" | "slack" | "terminal" | "web" | "voice";
   sender: string;
   senderName: string;
   text: string;

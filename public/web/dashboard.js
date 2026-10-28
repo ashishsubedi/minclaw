@@ -9,6 +9,9 @@
   // Global State
   let state = {
     overview: null,
+    telemetry: null,
+    telemetryTimer: null,
+    telemetryAutoRefresh: true,
     sessions: [],
     activeSessionKey: null,
     activeTab: "overview",
@@ -84,6 +87,7 @@
   const titles = {
     overview: "Overview",
     sessions: "Sessions & Activity",
+    telemetry: "Telemetry & System Vitals",
     memory: "Permanent Memory",
     integrations: "Integrations & Connected Services",
     scheduler: "Scheduler",
@@ -112,6 +116,13 @@
 
     const titleEl = $("#currentViewTitle");
     if (titleEl) titleEl.textContent = titles[tabId];
+
+    if (tabId === "telemetry") {
+      loadTelemetry();
+      startTelemetryPolling();
+    } else {
+      stopTelemetryPolling();
+    }
 
     if (tabId === "memory" && !state.permanentMemory) {
       loadPermanentMemory();
@@ -260,6 +271,10 @@
 
     if (rssEl) rssEl.textContent = `${o.daemon?.memoryRssMb ?? 42} MB`;
     if (uptimeEl) uptimeEl.textContent = `Uptime: ${formatUptime(o.daemon?.uptimeSeconds)}`;
+    const heapEl = $("#statHeap");
+    if (heapEl && typeof o.daemon?.heapUsedMb === "number") {
+      heapEl.textContent = `Heap: ${o.daemon.heapUsedMb} MB`;
+    }
 
     const totalSessions = o.sessions?.total || 0;
     if (sessEl) sessEl.textContent = `${totalSessions} Sessions`;
@@ -327,6 +342,405 @@
         </div>
       `;
     }).join("");
+  }
+
+  // ================= Telemetry Module =================
+  async function loadTelemetry() {
+    try {
+      const data = await fetchJSON("/api/telemetry");
+      state.telemetry = data;
+      renderTelemetry();
+    } catch (err) {
+      console.warn("Could not load telemetry:", err);
+    }
+  }
+  window.loadTelemetry = loadTelemetry;
+
+  function startTelemetryPolling() {
+    stopTelemetryPolling();
+    if (!state.telemetryAutoRefresh) return;
+    state.telemetryTimer = setInterval(() => {
+      if (state.activeTab === "telemetry") {
+        loadTelemetry();
+      } else {
+        stopTelemetryPolling();
+      }
+    }, 3000);
+  }
+
+  function stopTelemetryPolling() {
+    if (state.telemetryTimer) {
+      clearInterval(state.telemetryTimer);
+      state.telemetryTimer = null;
+    }
+  }
+
+  function toggleTelemetryAutoRefresh() {
+    state.telemetryAutoRefresh = !state.telemetryAutoRefresh;
+    const dot = $("#telemetryLiveDot");
+    const label = $("#telemetryLiveLabel");
+    if (state.telemetryAutoRefresh) {
+      if (dot) dot.className = "status-dot dot-green";
+      if (label) label.textContent = "Live: 3s";
+      showToast("Live telemetry streaming resumed (3s interval)", "info");
+      startTelemetryPolling();
+      loadTelemetry();
+    } else {
+      if (dot) dot.className = "status-dot dot-amber";
+      if (label) label.textContent = "Paused";
+      showToast("Live telemetry streaming paused", "info");
+      stopTelemetryPolling();
+    }
+  }
+  window.toggleTelemetryAutoRefresh = toggleTelemetryAutoRefresh;
+
+  async function triggerGarbageCollection() {
+    const btn = $("#btnTelemetryGc");
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = "Running GC...";
+    }
+    try {
+      const res = await fetchJSON("/api/telemetry/gc", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) {
+        if (res.freedMb > 0) {
+          showToast(`Garbage collection finished: freed ${res.freedMb} MB (RSS: ${res.beforeRssMb} → ${res.afterRssMb} MB)`, "success");
+        } else {
+          showToast(`Garbage collection completed (RSS: ${res.afterRssMb} MB, heap clean)`, "success");
+        }
+      }
+      await loadTelemetry();
+      await loadOverview();
+    } catch (err) {
+      showToast(`Garbage collection failed: ${err.message}`, "error");
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = "⚡ Run GC";
+      }
+    }
+  }
+  window.triggerGarbageCollection = triggerGarbageCollection;
+
+  function renderTelemetry() {
+    const t = state.telemetry;
+    if (!t) return;
+
+    // 1. Process Memory
+    const rssEl = $("#telemetryRss");
+    const heapUsedEl = $("#telemetryHeapUsed");
+    const heapPctEl = $("#telemetryHeapPct");
+    const heapProgEl = $("#telemetryHeapProgress");
+    if (rssEl) rssEl.textContent = `${t.memory?.rssMb ?? "--"} MB`;
+    if (heapUsedEl) heapUsedEl.textContent = `${t.memory?.heapUsedMb ?? "--"}`;
+    if (heapPctEl) heapPctEl.textContent = `${t.memory?.heapUsedPercent ?? 0}%`;
+    if (heapProgEl) heapProgEl.style.width = `${Math.min(100, Math.max(0, t.memory?.heapUsedPercent ?? 0))}%`;
+
+    // 2. CPU & Host Load
+    const load1mEl = $("#telemetryLoad1m");
+    const loadSubEl = $("#telemetryLoadSub");
+    const cpuCoresEl = $("#telemetryCpuCoresBadge");
+    const cpuModelEl = $("#telemetryCpuModel");
+    if (load1mEl) load1mEl.textContent = String(t.host?.loadAverage?.[0] ?? "--");
+    if (loadSubEl) loadSubEl.textContent = `${t.host?.loadAverage?.[1] ?? "--"} / ${t.host?.loadAverage?.[2] ?? "--"}`;
+    if (cpuCoresEl) cpuCoresEl.textContent = `${t.host?.cpuCores ?? "--"} Cores`;
+    if (cpuModelEl) cpuModelEl.textContent = `${t.host?.cpuModel || "Apple Silicon"}`;
+
+    // 3. Host System RAM
+    const hostMemTotalEl = $("#telemetryHostMemTotal");
+    const hostMemUsedEl = $("#telemetryHostMemUsed");
+    const hostMemPctEl = $("#telemetryHostMemPct");
+    const hostMemProgEl = $("#telemetryHostMemProgress");
+    if (hostMemTotalEl) hostMemTotalEl.textContent = `${t.host?.totalMemoryGb ?? "--"} GB Total`;
+    if (hostMemUsedEl) hostMemUsedEl.textContent = `${t.host?.usedMemoryGb ?? "--"} GB`;
+    if (hostMemPctEl) hostMemPctEl.textContent = `${t.host?.memoryUsagePercent ?? 0}%`;
+    if (hostMemProgEl) hostMemProgEl.style.width = `${Math.min(100, Math.max(0, t.host?.memoryUsagePercent ?? 0))}%`;
+
+    // 4. AI Tokens & Cache
+    const tokensEl = $("#telemetryTokensTotal");
+    const costEl = $("#telemetryCostBadge");
+    const cacheHitEl = $("#telemetryCacheHitRate");
+    const cacheHitProgEl = $("#telemetryCacheHitProgress");
+    const totalTokens = t.tokens?.totalTokens ?? 0;
+    if (tokensEl) tokensEl.textContent = totalTokens.toLocaleString();
+    if (costEl) costEl.textContent = `$${(t.tokens?.costTotal ?? 0).toFixed(4)}`;
+    const cacheRate = t.tokens?.cacheHitRate ?? 0;
+    if (cacheHitEl) cacheHitEl.textContent = `${cacheRate.toFixed(1)}%`;
+    if (cacheHitProgEl) cacheHitProgEl.style.width = `${Math.min(100, Math.max(0, cacheRate))}%`;
+
+    // 5. Daemon Vitals
+    const pidEl = $("#telemetryPid");
+    const uptimeEl = $("#telemetryUptime");
+    const sockEl = $("#telemetrySocketStatus");
+    const dotEl = $("#telemetryDaemonDot");
+    if (pidEl) pidEl.textContent = t.process?.running ? `PID ${t.process.pid}` : "Offline";
+    if (uptimeEl) uptimeEl.textContent = t.process?.formattedUptime || "--";
+    if (sockEl) {
+      sockEl.textContent = t.process?.socketExists ? "Active" : "Offline";
+      sockEl.className = t.process?.socketExists ? "text-green" : "text-amber";
+    }
+    if (dotEl) {
+      dotEl.className = `status-dot ${t.process?.running ? "dot-green" : "dot-amber"}`;
+    }
+
+    // Charts & Breakdown
+    renderTelemetryChart(t.history || []);
+    renderTokenBar(t.tokens);
+
+    // Detail Card 1: Runtime & Memory Allocations
+    const dRss = $("#detailRss");
+    const dHeap = $("#detailHeap");
+    const dExt = $("#detailExternal");
+    const dArr = $("#detailArrayBuffers");
+    const dBun = $("#detailBunVersion");
+    const dHostOs = $("#detailHostOs");
+    const dStateDir = $("#detailStateDir");
+    if (dRss) dRss.textContent = `${t.memory?.rssMb ?? "--"} MB`;
+    if (dHeap) dHeap.textContent = `${t.memory?.heapUsedMb ?? "--"} / ${t.memory?.heapTotalMb ?? "--"} MB`;
+    if (dExt) dExt.textContent = `${t.memory?.externalMb ?? 0} MB`;
+    if (dArr) dArr.textContent = `${t.memory?.arrayBuffersMb ?? 0} MB`;
+    if (dBun) dBun.textContent = `Bun v${t.process?.bunVersion || "1.3.14"}`;
+    if (dHostOs) dHostOs.textContent = `${t.host?.platform || "darwin"} (${t.host?.arch || "arm64"}) • macOS ${t.host?.osRelease || ""}`;
+    if (dStateDir) dStateDir.textContent = t.process?.stateDir || "~/.minclaw";
+
+    // Detail Card 2: AI Models & Cascade
+    const dPrimProv = $("#detailPrimaryProvider");
+    const dPrimModel = $("#detailPrimaryModel");
+    const dFallbacks = $("#detailFallbackChain");
+    const dTotalTurns = $("#detailTotalTurns");
+    const dSpend = $("#detailSpend");
+    if (dPrimProv) dPrimProv.textContent = t.models?.primary?.provider || "agy";
+    if (dPrimModel) dPrimModel.textContent = `${t.models?.primary?.provider || "agy"}:${t.models?.primary?.name || "flash:medium"}`;
+    if (dFallbacks) {
+      const fbList = (t.models?.fallbacks || []).map((f) => `${f.provider}/${f.name}`).join(" → ");
+      dFallbacks.textContent = fbList || "None configured";
+    }
+    if (dTotalTurns) dTotalTurns.textContent = String(t.traffic?.totalMessages ?? 0);
+    if (dSpend) dSpend.textContent = `$${(t.tokens?.costTotal ?? 0).toFixed(4)}`;
+
+    // Detail Card 3: Channel Traffic & Compaction
+    const chBadge = $("#detailChannelsCountBadge");
+    const chContainer = $("#telemetryChannelsContainer");
+    const compactedEl = $("#detailCompactedCount");
+    const channels = t.traffic?.channels || {};
+    const channelNames = Object.keys(channels);
+    if (chBadge) chBadge.textContent = `${channelNames.length} Active Channels`;
+    if (compactedEl) compactedEl.textContent = `${t.traffic?.compactedSessionsCount ?? 0} sessions`;
+
+    if (chContainer) {
+      if (channelNames.length === 0) {
+        chContainer.innerHTML = `<div class="text-xs text-muted p-2">No active channel traffic recorded yet.</div>`;
+      } else {
+        chContainer.innerHTML = channelNames
+          .map((ch) => {
+            const data = channels[ch];
+            const isVoice = ch === "terminal" || ch.includes("voice");
+            const isTelegram = ch === "telegram";
+            const isWa = ch === "whatsapp";
+            const badgeClass = isVoice ? "badge-green" : isTelegram ? "badge-blue" : isWa ? "badge-green" : "badge-purple";
+            const chName = isVoice ? "Voice HUD" : isTelegram ? "Telegram" : isWa ? "WhatsApp" : escapeHtml(ch);
+            return `
+              <div class="telemetry-table-row">
+                <div class="flex items-center gap-2">
+                  <span class="badge ${badgeClass} font-mono">${chName}</span>
+                  <span class="text-white">${data.sessions} sess</span>
+                </div>
+                <div class="flex items-center gap-3 text-xs">
+                  <span class="text-dim">${data.messages} msgs</span>
+                  <span class="text-green">${(data.tokens || 0).toLocaleString()} tok</span>
+                </div>
+              </div>
+            `;
+          })
+          .join("");
+      }
+    }
+
+    // Detail Card 4: Subsystems & Companion Extensions
+    const extVoice = (t.subsystems?.extensions || []).find((e) => e.id === "voice-mac");
+    const extStatusEl = $("#detailExtVoiceStatus");
+    const heartbeatSchedEl = $("#detailHeartbeatSchedule");
+    if (extStatusEl) {
+      if (extVoice?.status === "running") {
+        extStatusEl.textContent = `Running (PID ${extVoice.pid || "--"})`;
+        extStatusEl.className = "text-green font-bold";
+      } else {
+        extStatusEl.textContent = "Offline";
+        extStatusEl.className = "text-dim";
+      }
+    }
+    if (heartbeatSchedEl) {
+      heartbeatSchedEl.textContent = `${t.subsystems?.heartbeat?.cronExpr || "*/15 * * * *"} (${t.subsystems?.heartbeat?.enabled ? "Active" : "Disabled"})`;
+    }
+  }
+
+  function renderTelemetryChart(history) {
+    const svg = $("#telemetryMemoryChart");
+    if (!svg) return;
+
+    if (!history || history.length === 0) {
+      svg.innerHTML = `
+        <text x="250" y="65" text-anchor="middle" fill="var(--text-dim)" font-size="12" font-family="monospace">
+          Collecting telemetry time-series samples...
+        </text>
+      `;
+      return;
+    }
+
+    // Compute bounds
+    const rssValues = history.map((h) => h.rssMb || 0);
+    const heapValues = history.map((h) => h.heapUsedMb || 0);
+    const peakRss = Math.max(...rssValues, 10);
+    const minRss = Math.min(...rssValues);
+    const curRss = rssValues[rssValues.length - 1] || 0;
+    const curHeap = heapValues[heapValues.length - 1] || 0;
+
+    const peakEl = $("#chartPeakRss");
+    const curEl = $("#chartCurrentRss");
+    const heapEl = $("#chartBaselineHeap");
+    if (peakEl) peakEl.textContent = `${peakRss.toFixed(1)} MB`;
+    if (curEl) curEl.textContent = `${curRss.toFixed(1)} MB`;
+    if (heapEl) heapEl.textContent = `${curHeap.toFixed(1)} MB`;
+
+    const W = 500;
+    const H = 130;
+    const padTop = 15;
+    const padBottom = 20;
+    const padLeft = 10;
+    const padRight = 10;
+    const plotW = W - padLeft - padRight;
+    const plotH = H - padTop - padBottom;
+
+    const maxVal = Math.max(peakRss * 1.15, 50);
+    const minVal = 0;
+
+    const n = history.length;
+    function getX(i) {
+      if (n === 1) return padLeft + plotW / 2;
+      return padLeft + (i / (n - 1)) * plotW;
+    }
+    function getY(val) {
+      const norm = (val - minVal) / (maxVal - minVal);
+      return padTop + (1 - norm) * plotH;
+    }
+
+    // Build SVG paths for RSS
+    const rssPoints = history.map((h, i) => `${getX(i).toFixed(1)},${getY(h.rssMb || 0).toFixed(1)}`);
+    const heapPoints = history.map((h, i) => `${getX(i).toFixed(1)},${getY(h.heapUsedMb || 0).toFixed(1)}`);
+
+    const rssArea = [
+      `M ${getX(0).toFixed(1)},${getY(0).toFixed(1)}`,
+      ...rssPoints.map((p) => `L ${p}`),
+      `L ${getX(n - 1).toFixed(1)},${getY(0).toFixed(1)}`,
+      "Z",
+    ].join(" ");
+
+    const heapArea = [
+      `M ${getX(0).toFixed(1)},${getY(0).toFixed(1)}`,
+      ...heapPoints.map((p) => `L ${p}`),
+      `L ${getX(n - 1).toFixed(1)},${getY(0).toFixed(1)}`,
+      "Z",
+    ].join(" ");
+
+    const rssLine = `M ${rssPoints.join(" L ")}`;
+    const heapLine = `M ${heapPoints.join(" L ")}`;
+
+    const lastX = getX(n - 1);
+    const lastRssY = getY(curRss);
+    const lastHeapY = getY(curHeap);
+
+    svg.innerHTML = `
+      <defs>
+        <linearGradient id="rssGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#ffd60a" stop-opacity="0.28" />
+          <stop offset="100%" stop-color="#ffd60a" stop-opacity="0.0" />
+        </linearGradient>
+        <linearGradient id="heapGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#0a84ff" stop-opacity="0.22" />
+          <stop offset="100%" stop-color="#0a84ff" stop-opacity="0.0" />
+        </linearGradient>
+      </defs>
+
+      <!-- Horizontal gridlines -->
+      <line x1="${padLeft}" y1="${getY(maxVal * 0.75)}" x2="${W - padRight}" y2="${getY(maxVal * 0.75)}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3 3" />
+      <line x1="${padLeft}" y1="${getY(maxVal * 0.5)}" x2="${W - padRight}" y2="${getY(maxVal * 0.5)}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3 3" />
+      <line x1="${padLeft}" y1="${getY(maxVal * 0.25)}" x2="${W - padRight}" y2="${getY(maxVal * 0.25)}" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3 3" />
+      <line x1="${padLeft}" y1="${getY(0)}" x2="${W - padRight}" y2="${getY(0)}" stroke="rgba(255,255,255,0.12)" />
+
+      <!-- Area fills -->
+      <path d="${rssArea}" fill="url(#rssGrad)" />
+      <path d="${heapArea}" fill="url(#heapGrad)" />
+
+      <!-- Stroke lines -->
+      <path d="${rssLine}" fill="none" stroke="#ffd60a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />
+      <path d="${heapLine}" fill="none" stroke="#0a84ff" stroke-width="1.5" stroke-dasharray="2 2" stroke-linejoin="round" />
+
+      <!-- Latest Value Pulsing Dots -->
+      <circle cx="${lastX}" cy="${lastRssY}" r="4" fill="#ffd60a" />
+      <circle cx="${lastX}" cy="${lastHeapY}" r="3" fill="#0a84ff" />
+
+      <!-- Chart Labels -->
+      <text x="${W - padRight}" y="${getY(maxVal * 0.75) - 3}" text-anchor="end" fill="var(--text-dim)" font-size="9" font-family="monospace">${(maxVal * 0.75).toFixed(0)} MB</text>
+      <text x="${padLeft}" y="${H - 5}" text-anchor="start" fill="var(--text-dim)" font-size="9" font-family="monospace">${n} snapshots</text>
+      <text x="${W - padRight}" y="${H - 5}" text-anchor="end" fill="var(--text-dim)" font-size="9" font-family="monospace">Now</text>
+    `;
+  }
+
+  function renderTokenBar(tokens) {
+    if (!tokens) return;
+    const inp = tokens.input || 0;
+    const cr = tokens.cacheRead || 0;
+    const out = tokens.output || 0;
+    const cw = tokens.cacheWrite || 0;
+    const total = tokens.totalTokens || (inp + cr + out + cw) || 0;
+
+    const barTotal = $("#tokenBarTotal");
+    const barInp = $("#tokenBarInput");
+    const barCr = $("#tokenBarCacheRead");
+    const barOut = $("#tokenBarOutput");
+    const barCw = $("#tokenBarCacheWrite");
+
+    const legInp = $("#tokenLegendInput");
+    const legCr = $("#tokenLegendCacheRead");
+    const legOut = $("#tokenLegendOutput");
+    const legCw = $("#tokenLegendCacheWrite");
+    const cacheSavedPct = $("#telemetryCacheSavedPct");
+    const costSourceBadge = $("#telemetryCostSourceBadge");
+
+    if (barTotal) barTotal.textContent = `${total.toLocaleString()} tokens`;
+    if (legInp) legInp.textContent = inp.toLocaleString();
+    if (legCr) legCr.textContent = cr.toLocaleString();
+    if (legOut) legOut.textContent = out.toLocaleString();
+    if (legCw) legCw.textContent = cw.toLocaleString();
+
+    if (costSourceBadge) {
+      costSourceBadge.textContent = tokens.costSource === "catalog" ? "Catalog Pricing" : "Estimated OpenAI Rates";
+    }
+
+    if (cacheSavedPct) {
+      cacheSavedPct.textContent = `${(tokens.cacheHitRate || 0).toFixed(1)}% Cache Hit Rate`;
+    }
+
+    if (total > 0) {
+      const pInp = ((inp / total) * 100).toFixed(1);
+      const pCr = ((cr / total) * 100).toFixed(1);
+      const pOut = ((out / total) * 100).toFixed(1);
+      const pCw = ((cw / total) * 100).toFixed(1);
+
+      if (barInp) barInp.style.width = `${pInp}%`;
+      if (barCr) barCr.style.width = `${pCr}%`;
+      if (barOut) barOut.style.width = `${pOut}%`;
+      if (barCw) barCw.style.width = `${pCw}%`;
+    } else {
+      if (barInp) barInp.style.width = "25%";
+      if (barCr) barCr.style.width = "25%";
+      if (barOut) barOut.style.width = "25%";
+      if (barCw) barCw.style.width = "25%";
+    }
   }
 
   // Sessions Tab
@@ -436,6 +850,14 @@
         return { channel, sender, icon: "💬", badgeClass: "badge-green", name: `WhatsApp: ${sender}` };
       case "voice":
         return { channel, sender, icon: "🎙️", badgeClass: "badge-purple", name: "Voice HUD Companion" };
+      case "terminal":
+        return {
+          channel: sender.includes("voice") ? "voice" : "terminal",
+          sender,
+          icon: sender.includes("voice") ? "🎙️" : "💻",
+          badgeClass: sender.includes("voice") ? "badge-purple" : "badge-dim",
+          name: sender.includes("voice") ? "Voice HUD Companion" : `Terminal: ${sender}`,
+        };
       case "web":
       default:
         return {

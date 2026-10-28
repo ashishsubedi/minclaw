@@ -141,7 +141,7 @@ export async function handleMessage(
   let lastStatusAt = 0;
   let statusSent = false;
   const sendStatus = async (statusText: string): Promise<void> => {
-    if (msg.channel === "terminal" || msg.sender.startsWith("voice")) return;
+    if (msg.channel === "terminal" || msg.channel === "voice" || msg.sender.startsWith("voice")) return;
     const now = Date.now();
     if (now - lastStatusAt < 3000) return;
     lastStatusAt = now;
@@ -150,7 +150,7 @@ export async function handleMessage(
   };
 
   try {
-    if (msg.channel !== "terminal") {
+    if (msg.channel !== "terminal" && msg.channel !== "voice") {
       statusTimer = setTimeout(() => {
         void sendStatus("Thinking...");
       }, 1200);
@@ -168,7 +168,7 @@ export async function handleMessage(
         console.log(`[router] Status: ${statusText}`);
         if (onStatus) {
           await onStatus(statusText);
-        } else if (msg.channel !== "terminal") {
+        } else if (msg.channel !== "terminal" && msg.channel !== "voice") {
           if (!statusSent) {
             await sendStatus("Working...");
           }

@@ -252,8 +252,38 @@ async function runQAVerification() {
       if (hash !== "#integrations") throw new Error(`Expected hash #integrations, got ${hash}`);
     });
 
-    // Step 9: Zero Console & Network Errors Check
-    await step("9. Console & Network Error Invariant", async () => {
+    // Step 9: Process Vitals Link to Telemetry & Full Telemetry Tab Verification
+    await step("9. Process Vitals Card Link & Telemetry Dashboard Check", async () => {
+      // 1. Return to overview
+      await page.click('button[data-tab="overview"]');
+      await page.waitForSelector("#page-overview:not(.hidden)", { timeout: 3000 });
+
+      // 2. Click Process Vitals card (which links to telemetry)
+      await page.click("#statMemoryRss");
+
+      // 3. Must navigate to telemetry page
+      await page.waitForSelector("#page-telemetry:not(.hidden)", { timeout: 3000 });
+      const hash = await page.evaluate(() => window.location.hash);
+      if (hash !== "#telemetry") throw new Error(`Expected hash #telemetry, got ${hash}`);
+
+      // 4. Verify telemetry metrics rendered
+      await page.waitForSelector("#telemetryRss", { timeout: 3000 });
+      await page.waitForSelector("#telemetryLoad1m", { timeout: 3000 });
+      await page.waitForSelector("#telemetryTokensTotal", { timeout: 3000 });
+      await page.waitForSelector("#telemetryMemoryChart", { timeout: 3000 });
+
+      const rssText = await page.$eval("#telemetryRss", (el) => el.textContent);
+      if (!rssText || !rssText.includes("MB")) throw new Error(`Telemetry RSS not populated: ${rssText}`);
+
+      // 5. Trigger Garbage Collection button
+      await page.click("#btnTelemetryGc");
+      await new Promise((r) => setTimeout(r, 600));
+
+      await page.screenshot({ path: join(SCREENSHOT_DIR, "07_telemetry.png") });
+    });
+
+    // Step 10: Zero Console & Network Errors Check
+    await step("10. Console & Network Error Invariant", async () => {
       if (consoleErrors.length > 0) {
         throw new Error(`Console errors detected: ${consoleErrors.join("; ")}`);
       }
