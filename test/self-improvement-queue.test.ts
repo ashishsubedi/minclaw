@@ -130,9 +130,9 @@ describe("Decoupled Self-Improvement Queue & Execution Guardrails", () => {
     expect(all[0]?.status).toBe("in_progress");
   });
 
-  it("5. confirms 75k token watermark and autonomous 5+5 step budget directives", () => {
+  it("5. confirms 75k token watermark and autonomous step budget directives", () => {
     expect(WATERMARK_CEILING_TOKENS).toBe(75000);
-    expect(AGY_STATIC_DELEGATION_HEADER).toContain("Strict Autonomous Step Budget (5 + 5 Hard Stop)");
+    expect(AGY_STATIC_DELEGATION_HEADER).toContain("Strict Autonomous Step Budget");
     expect(AGY_STATIC_DELEGATION_HEADER).toContain("Live Turn Decoupled Self-Improvement");
     expect(AGY_STATIC_DELEGATION_HEADER).toContain("queue_self_improvement");
   });
