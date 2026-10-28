@@ -440,25 +440,27 @@
     if (heapPctEl) heapPctEl.textContent = `${t.memory?.heapUsedPercent ?? 0}%`;
     if (heapProgEl) heapProgEl.style.width = `${Math.min(100, Math.max(0, t.memory?.heapUsedPercent ?? 0))}%`;
 
-    // 2. CPU & Host Load
+    // 2. MinClaw Process CPU
     const load1mEl = $("#telemetryLoad1m");
     const loadSubEl = $("#telemetryLoadSub");
     const cpuCoresEl = $("#telemetryCpuCoresBadge");
     const cpuModelEl = $("#telemetryCpuModel");
-    if (load1mEl) load1mEl.textContent = String(t.host?.loadAverage?.[0] ?? "--");
-    if (loadSubEl) loadSubEl.textContent = `${t.host?.loadAverage?.[1] ?? "--"} / ${t.host?.loadAverage?.[2] ?? "--"}`;
-    if (cpuCoresEl) cpuCoresEl.textContent = `${t.host?.cpuCores ?? "--"} Cores`;
-    if (cpuModelEl) cpuModelEl.textContent = `${t.host?.cpuModel || "Apple Silicon"}`;
+    const cpuPct = t.cpu?.percent ?? 0;
+    if (load1mEl) load1mEl.textContent = `${cpuPct.toFixed(1)}%`;
+    if (loadSubEl) loadSubEl.textContent = `User: ${t.cpu?.userSeconds ?? 0}s • Sys: ${t.cpu?.systemSeconds ?? 0}s`;
+    if (cpuCoresEl) cpuCoresEl.textContent = t.process?.pid ? `PID ${t.process.pid}` : "MinClaw";
+    if (cpuModelEl) cpuModelEl.textContent = `Lifetime CPU: ${t.cpu?.totalSeconds ?? 0}s (Bun)`;
 
-    // 3. Host System RAM
+    // 3. MinClaw Storage & State Footprint
     const hostMemTotalEl = $("#telemetryHostMemTotal");
     const hostMemUsedEl = $("#telemetryHostMemUsed");
     const hostMemPctEl = $("#telemetryHostMemPct");
     const hostMemProgEl = $("#telemetryHostMemProgress");
-    if (hostMemTotalEl) hostMemTotalEl.textContent = `${t.host?.totalMemoryGb ?? "--"} GB Total`;
-    if (hostMemUsedEl) hostMemUsedEl.textContent = `${t.host?.usedMemoryGb ?? "--"} GB`;
-    if (hostMemPctEl) hostMemPctEl.textContent = `${t.host?.memoryUsagePercent ?? 0}%`;
-    if (hostMemProgEl) hostMemProgEl.style.width = `${Math.min(100, Math.max(0, t.host?.memoryUsagePercent ?? 0))}%`;
+    const totalStorageMb = t.storage?.totalMb ?? 0;
+    if (hostMemTotalEl) hostMemTotalEl.textContent = `${totalStorageMb.toFixed(2)} MB Total`;
+    if (hostMemUsedEl) hostMemUsedEl.textContent = `${totalStorageMb.toFixed(2)} MB`;
+    if (hostMemPctEl) hostMemPctEl.textContent = `State: ${t.storage?.stateDirMb ?? 0} MB • S&M: ${((t.storage?.sessionsDirMb || 0) + (t.storage?.mediaDirMb || 0)).toFixed(2)} MB`;
+    if (hostMemProgEl) hostMemProgEl.style.width = `${Math.min(100, Math.max(10, Math.round(totalStorageMb * 25)))}%`;
 
     // 4. AI Tokens & Cache
     const tokensEl = $("#telemetryTokensTotal");
@@ -504,8 +506,8 @@
     if (dExt) dExt.textContent = `${t.memory?.externalMb ?? 0} MB`;
     if (dArr) dArr.textContent = `${t.memory?.arrayBuffersMb ?? 0} MB`;
     if (dBun) dBun.textContent = `Bun v${t.process?.bunVersion || "1.3.14"}`;
-    if (dHostOs) dHostOs.textContent = `${t.host?.platform || "darwin"} (${t.host?.arch || "arm64"}) • macOS ${t.host?.osRelease || ""}`;
-    if (dStateDir) dStateDir.textContent = t.process?.stateDir || "~/.minclaw";
+    if (dHostOs) dHostOs.textContent = `User: ${t.cpu?.userSeconds ?? 0}s • Kernel: ${t.cpu?.systemSeconds ?? 0}s (Total: ${t.cpu?.totalSeconds ?? 0}s)`;
+    if (dStateDir) dStateDir.textContent = `${t.process?.stateDir || "~/.minclaw"} (${totalStorageMb.toFixed(2)} MB total on disk)`;
 
     // Detail Card 2: AI Models & Cascade
     const dPrimProv = $("#detailPrimaryProvider");

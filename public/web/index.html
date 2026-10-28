@@ -376,36 +376,36 @@
                 </div>
               </div>
 
-              <!-- 2. CPU & Host Load -->
+              <!-- 2. MinClaw Process CPU -->
               <div class="card p-4 space-y-1">
                 <div class="flex justify-between items-center text-xs text-muted">
-                  <span>CPU Load (1m)</span>
-                  <span id="telemetryCpuCoresBadge" class="badge badge-blue font-mono text-xs">-- Cores</span>
+                  <span>MinClaw CPU</span>
+                  <span id="telemetryCpuCoresBadge" class="badge badge-blue font-mono text-xs">Process</span>
                 </div>
-                <div id="telemetryLoad1m" class="text-2xl font-bold text-white font-mono tabular-nums">--</div>
+                <div id="telemetryLoad1m" class="text-2xl font-bold text-white font-mono tabular-nums">0.0%</div>
                 <div class="space-y-1 pt-1">
                   <div class="text-xs text-muted font-mono flex justify-between">
-                    <span>5m / 15m Load:</span>
+                    <span>User / Kernel:</span>
                     <span id="telemetryLoadSub" class="text-dim">-- / --</span>
                   </div>
-                  <div id="telemetryCpuModel" class="text-xs text-muted truncate">Apple Silicon</div>
+                  <div id="telemetryCpuModel" class="text-xs text-muted truncate">Lifetime CPU: --</div>
                 </div>
               </div>
 
-              <!-- 3. Host System RAM -->
+              <!-- 3. MinClaw Storage Footprint -->
               <div class="card p-4 space-y-1">
                 <div class="flex justify-between items-center text-xs text-muted">
-                  <span>Host RAM</span>
-                  <span id="telemetryHostMemTotal" class="text-blue font-mono font-medium">-- GB Total</span>
+                  <span>Storage Footprint</span>
+                  <span id="telemetryHostMemTotal" class="text-blue font-mono font-medium">~/.minclaw</span>
                 </div>
-                <div id="telemetryHostMemUsed" class="text-2xl font-bold text-white font-mono tabular-nums">-- GB</div>
+                <div id="telemetryHostMemUsed" class="text-2xl font-bold text-white font-mono tabular-nums">-- MB</div>
                 <div class="space-y-1 pt-1">
                   <div class="flex justify-between text-xs text-muted font-mono">
-                    <span>Memory Used:</span>
-                    <span id="telemetryHostMemPct" class="text-blue font-semibold">--%</span>
+                    <span>Disk Space Used:</span>
+                    <span id="telemetryHostMemPct" class="text-blue font-semibold">-- MB</span>
                   </div>
                   <div class="progress-track">
-                    <div id="telemetryHostMemProgress" class="progress-fill fill-blue" style="width: 0%;"></div>
+                    <div id="telemetryHostMemProgress" class="progress-fill fill-blue" style="width: 25%;"></div>
                   </div>
                 </div>
               </div>
@@ -565,7 +565,7 @@
                     <span id="detailBunVersion" class="text-green font-bold">Bun v--</span>
                   </div>
                   <div class="telemetry-table-row">
-                    <span class="text-muted">Host OS & Architecture:</span>
+                    <span class="text-muted">MinClaw Process CPU Time:</span>
                     <span id="detailHostOs" class="text-white">--</span>
                   </div>
                   <div class="telemetry-table-row">

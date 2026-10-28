@@ -88,6 +88,24 @@ export type TelemetryData = {
     arrayBuffersMb: number;
     gcAvailable: boolean;
   };
+  cpu: {
+    percent: number;
+    userSeconds: number;
+    systemSeconds: number;
+    totalSeconds: number;
+    userMs: number;
+    systemMs: number;
+  };
+  storage: {
+    totalMb: number;
+    stateDirMb: number;
+    sessionsDirMb: number;
+    mediaDirMb: number;
+    logsDirMb: number;
+    stateDirPath: string;
+    sessionsDirPath: string;
+    mediaDirPath: string;
+  };
   host: {
     platform: string;
     osRelease: string;
@@ -455,6 +473,28 @@ function formatDuration(seconds: number): string {
 const MAX_SNAPSHOTS = 30;
 const telemetryHistory: TelemetrySnapshot[] = [];
 
+let lastCpuSample = {
+  cpu: process.cpuUsage(),
+  time: performance.now(),
+};
+
+function getDirSize(dir: string): number {
+  let total = 0;
+  if (!existsSync(dir)) return 0;
+  try {
+    const entries = readdirSync(dir);
+    for (const entry of entries) {
+      const p = join(dir, entry);
+      try {
+        const stat = statSync(p);
+        if (stat.isFile()) total += stat.size;
+        else if (stat.isDirectory()) total += getDirSize(p);
+      } catch {}
+    }
+  } catch {}
+  return total;
+}
+
 export function recordTelemetrySnapshot(
   rssMb: number,
   heapUsedMb: number,
@@ -610,6 +650,36 @@ export async function getTelemetryData(): Promise<TelemetryData> {
   const cacheDenom = inputTokens + cacheReadTokens;
   const cacheHitRate = cacheDenom > 0 ? Math.round((cacheReadTokens / cacheDenom) * 1000) / 10 : 0;
 
+  // MinClaw Process CPU calculation
+  const now = performance.now();
+  const elapsedMs = Math.max(1, now - lastCpuSample.time);
+  const diff = process.cpuUsage(lastCpuSample.cpu);
+  const cpuPercent = Math.min(100, Math.round(((diff.user + diff.system) / 1000 / elapsedMs) * 100 * 10) / 10);
+  lastCpuSample = { cpu: process.cpuUsage(), time: now };
+
+  const totalCpu = process.cpuUsage();
+  const userSeconds = Math.round((totalCpu.user / 1e6) * 10) / 10;
+  const systemSeconds = Math.round((totalCpu.system / 1e6) * 10) / 10;
+  const totalSeconds = Math.round(((totalCpu.user + totalCpu.system) / 1e6) * 10) / 10;
+
+  // MinClaw Storage Footprint
+  const stateDir = getStateDir();
+  const sessionsDir = getSessionDir();
+  const mediaDir = resolve(import.meta.dir, "..", "..", "media");
+  const logsDir = join(stateDir, "logs");
+
+  const stateDirBytes = getDirSize(stateDir);
+  const sessionsDirBytes = getDirSize(sessionsDir);
+  const mediaDirBytes = getDirSize(mediaDir);
+  const logsDirBytes = getDirSize(logsDir);
+  const totalStorageBytes = stateDirBytes + sessionsDirBytes + mediaDirBytes;
+
+  const stateDirMb = Math.round((stateDirBytes / (1024 * 1024)) * 100) / 100;
+  const sessionsDirMb = Math.round((sessionsDirBytes / (1024 * 1024)) * 100) / 100;
+  const mediaDirMb = Math.round((mediaDirBytes / (1024 * 1024)) * 100) / 100;
+  const logsDirMb = Math.round((logsDirBytes / (1024 * 1024)) * 100) / 100;
+  const storageTotalMb = Math.round((totalStorageBytes / (1024 * 1024)) * 100) / 100;
+
   recordTelemetrySnapshot(rssMb, heapUsedMb, heapTotalMb, loadAvg[0] ?? 0, totalTokens);
 
   const config = loadConfig();
@@ -638,6 +708,24 @@ export async function getTelemetryData(): Promise<TelemetryData> {
       externalMb,
       arrayBuffersMb,
       gcAvailable: typeof (Bun as any).gc === "function",
+    },
+    cpu: {
+      percent: cpuPercent,
+      userSeconds,
+      systemSeconds,
+      totalSeconds,
+      userMs: Math.round(totalCpu.user / 1000),
+      systemMs: Math.round(totalCpu.system / 1000),
+    },
+    storage: {
+      totalMb: storageTotalMb,
+      stateDirMb,
+      sessionsDirMb,
+      mediaDirMb,
+      logsDirMb,
+      stateDirPath: stateDir,
+      sessionsDirPath: sessionsDir,
+      mediaDirPath: mediaDir,
     },
     host: {
       platform: os.platform(),
