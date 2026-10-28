@@ -391,6 +391,21 @@ export function _setAgySessionForTest(sessionKey: string, conversationId: string
   agySessions.set(sessionKey, conversationId);
 }
 
+export function getStepBudget(maxIterations?: number): { hardStop: number; firstPhase: number } {
+  let configured = maxIterations;
+  if (!configured) {
+    try {
+      const cfg = loadConfig();
+      configured = cfg.sessions?.maxToolIterations;
+    } catch {
+      // fallback
+    }
+  }
+  const hardStop = configured && configured > 0 ? configured : 15;
+  const firstPhase = Math.max(1, Math.floor(hardStop / 2));
+  return { hardStop, firstPhase };
+}
+
 export const AGY_STATIC_DELEGATION_HEADER = `[MinClaw Autonomous Agent Delegation]
 You are being invoked as the autonomous execution agent for MinClaw, a personal AI assistant daemon.
 MinClaw has delegated this request to you as its fallback agent.
@@ -412,11 +427,12 @@ Operating Directives:
    - Save permanent memory: bun run src/cli.ts tool call remember note="<fact>"
    - Search chat memory: bun run src/cli.ts tool call search_memory query="<keyword>"
    - Schedule reminder: bun run src/cli.ts tool call schedule_reminder when="<time>" message="<text>"
+   - List scheduled jobs/reminders: bun run src/cli.ts tool call list_scheduled_jobs
+   - Cancel scheduled job: bun run src/cli.ts tool call cancel_scheduled_job id="<job-id>"
    - Queue self-improvement: bun run src/cli.ts tool call queue_self_improvement title="..." description="..." targetType="skill"
-3. Strict Autonomous Step Budget (5 + 5 Hard Stop):
-   - You have a strict budget of at most 5 tool calls for this request.
-   - If absolutely necessary, you may use up to 5 additional tool calls (hard maximum 10 tools total).
-   - Under NO circumstance exceed 10 tool calls. At or before 10 tool steps, STOP calling tools and deliver your final synthesized response to the user.
+3. Strict Autonomous Step Budget:
+   - You have an autonomous tool budget per turn (aim for 1-5 tool calls; hard limit enforced by daemon).
+   - Under NO circumstance exceed your step budget. At or before reaching the budget, STOP calling tools and deliver your final synthesized response to the user.
 4. Live Turn Decoupled Self-Improvement:
    - When responding to user interaction, DO NOT read or edit \`src/\` codebase files or run \`bun test\`.
    - Following Google Research's Harness² framework, self-improvement targets execution scaffolding: OpenClaw skills (\`skills/<name>/SKILL.md\` — consult existing \`skills/skill-creator/SKILL.md\` for canonical patterns and structure), standalone helper scripts (\`scripts/<name>.(py|ts|sh)\`), or operational heuristics (\`brain/operational-memory.md\`) rather than mutating core daemon source code (\`src/*.ts\`).
@@ -590,6 +606,84 @@ export function buildAgySpawnArgs(
   return spawnArgs;
 }
 
+export async function synthesizeFromCapturedTools(
+  context: { systemPrompt: string; messages: Message[] },
+  capturedToolCalls: Array<{ name: string; input: unknown; output: string }>,
+  resolvedModels: ResolvedModel[],
+  sessionKey?: string,
+  status?: (text: string) => Promise<void>
+): Promise<string | null> {
+  const lastMsg = context.messages[context.messages.length - 1];
+  let userQuery = "";
+  if (lastMsg) {
+    if (typeof lastMsg.content === "string") {
+      userQuery = lastMsg.content;
+    } else if (Array.isArray(lastMsg.content)) {
+      userQuery = (lastMsg.content as any[])
+        .filter((p: any) => p.type === "text")
+        .map((p: any) => p.text)
+        .join("\n");
+    } else {
+      userQuery = String(lastMsg.content);
+    }
+  }
+
+  const toolSummaries = capturedToolCalls
+    .map(
+      (c, i) =>
+        `[Tool ${i + 1}: ${c.name}]\nInput: ${JSON.stringify(c.input)}\nResult:\n${budgetToolOutput(c.output, 2000)}`
+    )
+    .join("\n\n");
+
+  const synthesisPrompt = [
+    `The user asked: "${userQuery}"`,
+    "",
+    `The autonomous execution reached its tool step budget (${capturedToolCalls.length} tool calls). Below are the tool operations executed and their results:`,
+    "",
+    toolSummaries,
+    "",
+    "Synthesize a clear, concise, and helpful final response directly answering the user's request based on these findings. Do NOT call any tools. If the information partially or fully answers the user's query, present it cleanly. If any detail is missing, clearly explain what was found and what remains unverified.",
+  ].join("\n");
+
+  const synthMessages: Message[] = [
+    {
+      role: "user",
+      content: synthesisPrompt,
+      timestamp: Date.now(),
+    },
+  ];
+
+  // Try direct API models first for fast, reliable single-turn synthesis without spawning another agy subprocess
+  const directModels = resolvedModels.filter((rm) => rm.provider !== "agy");
+  const modelsToTry = directModels.length > 0 ? directModels : resolvedModels;
+
+  try {
+    const res = await callModelWithFallback(
+      modelsToTry,
+      { systemPrompt: context.systemPrompt, messages: synthMessages, tools: [] },
+      { maxTokens: 4096 },
+      sessionKey,
+      status
+    );
+
+    if (res.response.role === "assistant") {
+      const text = Array.isArray(res.response.content)
+        ? res.response.content
+            .filter((b) => b.type === "text")
+            .map((b) => ("text" in b ? b.text : ""))
+            .join("\n")
+        : String(res.response.content);
+      if (text.trim()) {
+        return text.trim();
+      }
+    }
+  } catch (err: any) {
+    debugLog(`synthesizeFromCapturedTools failed: ${err.message}`);
+  }
+
+  return null;
+}
+
 export async function callModelWithFallback(
   resolvedModels: ResolvedModel[],
   context: { systemPrompt: string; messages: Message[]; tools: any[]; operationalMemory?: string },
@@ -636,8 +730,7 @@ export async function callModelWithFallback(
             let agyError: string | undefined;
             let agyUsage: any = undefined;
             let agyToolStepCount = 0;
-            const AGY_FIRST_PHASE_CAP = 5;
-            const AGY_HARD_STOP_LIMIT = 10;
+            const { hardStop: AGY_HARD_STOP_LIMIT, firstPhase: AGY_FIRST_PHASE_CAP } = getStepBudget();
             let progressUpdateSent = false;
             let hardStopTriggered = false;
 
@@ -724,22 +817,17 @@ export async function callModelWithFallback(
 
                     if (agyToolStepCount === AGY_FIRST_PHASE_CAP && !progressUpdateSent) {
                       progressUpdateSent = true;
-                      console.log(`${logPrefix} ⏱️ Progress checkpoint: 5 tool steps completed. Allowing up to 5 additional steps.`);
+                      const remaining = AGY_HARD_STOP_LIMIT - AGY_FIRST_PHASE_CAP;
+                      console.log(`${logPrefix} ⏱️ Progress checkpoint: ${AGY_FIRST_PHASE_CAP} tool steps completed. Allowing up to ${remaining} additional steps.`);
                       if (status) {
                         try {
-                          await status("Progress update: 5 steps completed. Continuing with up to 5 additional steps...");
+                          await status(`Progress update: ${AGY_FIRST_PHASE_CAP} steps completed. Continuing with up to ${remaining} additional steps...`);
                         } catch (e: any) {
                           debugLog(`status callback error: ${e.message}`);
                         }
                       }
-                    } else if (agyToolStepCount >= AGY_HARD_STOP_LIMIT && !hardStopTriggered) {
-                      hardStopTriggered = true;
-                      console.warn(`${logPrefix} 🛑 Hard stop reached (${AGY_HARD_STOP_LIMIT} tools). Terminating agy execution.`);
-                      try {
-                        proc.kill("SIGTERM");
-                      } catch (err: any) {
-                        debugLog(`Failed to terminate proc on hard stop: ${err.message}`);
-                      }
+                    } else if (agyToolStepCount >= AGY_HARD_STOP_LIMIT) {
+                      console.warn(`${logPrefix} ⚠️ Budget limit reached (${AGY_HARD_STOP_LIMIT} tools). Awaiting agy final synthesis without allowing further tools.`);
                     }
                   }
                 } else if (step.step_type === "agent_response") {
@@ -822,12 +910,24 @@ export async function callModelWithFallback(
             const stderr = (await stderrPromise).trim();
             const code = await proc.exited;
 
-            if (hardStopTriggered) {
-              if (!textRes) {
-                textRes =
-                  `[Autonomous Step Cap Reached - 10 Steps]\nI completed 10 tool operations:\n` +
-                  capturedToolCalls.map((c) => `- ${c.name}`).join("\n") +
-                  `\n\nI have reached the maximum autonomous step budget. The preliminary operations have been executed as summarized above.`;
+            if (hardStopTriggered || (agyToolStepCount >= AGY_HARD_STOP_LIMIT && !textRes)) {
+              if (!textRes && capturedToolCalls.length > 0) {
+                console.log(`${logPrefix} 🧠 Step cap reached without final text. Synthesizing response from ${capturedToolCalls.length} captured tool calls...`);
+                const synthesized = await synthesizeFromCapturedTools(
+                  context,
+                  capturedToolCalls,
+                  resolvedModels,
+                  sessionKey,
+                  status
+                );
+                if (synthesized) {
+                  textRes = synthesized;
+                } else {
+                  textRes =
+                    `[Autonomous Step Cap Reached - ${agyToolStepCount} Steps]\nI completed ${agyToolStepCount} tool operations:\n` +
+                    capturedToolCalls.map((c) => `- ${c.name}`).join("\n") +
+                    `\n\nI have reached the maximum autonomous step budget. The preliminary operations have been executed as summarized above.`;
+                }
               }
             } else {
               if (agyError) {
@@ -1113,8 +1213,7 @@ export async function runAgent(
     clearPendingConfirmation(sessionKey);
   }
 
-  const FIRST_PHASE_CAP = 5;
-  const HARD_STOP_CAP = Math.min(config.sessions.maxToolIterations ?? 10, 10);
+  const { hardStop: HARD_STOP_CAP, firstPhase: FIRST_PHASE_CAP } = getStepBudget(config.sessions?.maxToolIterations);
   let progressUpdateSent = false;
 
   for (let i = 0; i < HARD_STOP_CAP; i++) {
@@ -1124,10 +1223,11 @@ export async function runAgent(
 
     if (i === FIRST_PHASE_CAP && !progressUpdateSent) {
       progressUpdateSent = true;
-      console.log(`${logPrefix} ⏱️ Progress checkpoint: 5 tool iterations completed. Continuing with up to 5 additional iterations.`);
+      const remaining = HARD_STOP_CAP - FIRST_PHASE_CAP;
+      console.log(`${logPrefix} ⏱️ Progress checkpoint: ${FIRST_PHASE_CAP} tool iterations completed. Continuing with up to ${remaining} additional iterations.`);
       if (status) {
         try {
-          await status("Progress update: 5 steps completed. Continuing with up to 5 additional steps...");
+          await status(`Progress update: ${FIRST_PHASE_CAP} steps completed. Continuing with up to ${remaining} additional steps...`);
         } catch (e: any) {
           debugLog(`status callback error: ${e.message}`);
         }
@@ -1282,7 +1382,7 @@ export async function runAgent(
   console.warn(`${logPrefix} 🛑 Hard stop reached (${HARD_STOP_CAP} iterations). Forcing final synthesized response.`);
   messages.push({
     role: "user",
-    content: "Hard stop reached (10 tool iterations). You have reached the maximum allowed tool operations for this turn. Do NOT call any more tools. Provide your final concise synthesized response now summarizing your results. If answer is incomplete, clearly indicate what is missing and why.",
+    content: `Hard stop reached (${HARD_STOP_CAP} tool iterations). You have reached the maximum allowed tool operations for this turn. Do NOT call any more tools. Provide your final concise synthesized response now summarizing your results. If answer is incomplete, clearly indicate what is missing and why.`,
     timestamp: Date.now(),
   });
 
@@ -1310,7 +1410,7 @@ export async function runAgent(
   }
 
   return {
-    text: `[Autonomous Step Cap Reached - 10 Iterations]\nCompleted ${toolCallLog.length} tool operations. Execution stopped at the 10-step hard cap.`,
+    text: `[Autonomous Step Cap Reached - ${HARD_STOP_CAP} Iterations]\nCompleted ${toolCallLog.length} tool operations. Execution stopped at the ${HARD_STOP_CAP}-step hard cap.`,
     toolCalls: toolCallLog.length > 0 ? toolCallLog : undefined,
     usage: lastUsage,
   };

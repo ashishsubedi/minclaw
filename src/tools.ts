@@ -8,7 +8,7 @@ import { sessionKeyFromMessage, clearSession } from "./session.ts";
 import { resolve, dirname } from "path";
 import { readFileSync, existsSync, appendFileSync, mkdirSync, writeFileSync } from "fs";
 import { getChannelSender, detectMediaType, getRegisteredChannels } from "./channels/registry.ts";
-import { addJob, parseTimeToJob } from "./scheduler/scheduler.ts";
+import { addJob, parseTimeToJob, listJobs, removeJob, type ScheduledJob } from "./scheduler/scheduler.ts";
 import { listAllUnreadEmails, sendEmail, readEmailMessage } from "./email/service.ts";
 import { listAllUpcomingEvents, createCalendarEvent, getLastCalendarError } from "./email/calendar.ts";
 import {
@@ -160,6 +160,43 @@ export const scheduleReminderTool: Tool<typeof ScheduleReminderParams> = {
     "Use for requests like 'remind me in 1 minute' or 'message me at 3pm'. " +
     "Returns the job id and next run time if scheduled successfully.",
   parameters: ScheduleReminderParams,
+};
+
+const ListScheduledJobsParams = Type.Object({
+  channel: Type.Optional(
+    Type.String({
+      description: "Optional channel filter (e.g. 'telegram', 'whatsapp', 'voice')",
+    })
+  ),
+  includeAll: Type.Optional(
+    Type.Boolean({
+      description: "Whether to return all jobs across channels (default: true)",
+    })
+  ),
+});
+
+export const listScheduledJobsTool: Tool<typeof ListScheduledJobsParams> = {
+  name: "list_scheduled_jobs",
+  description:
+    "List all currently scheduled reminder and agentic jobs stored in sessions/scheduled-jobs.json. " +
+    "Returns job ID, name, schedule cron expression, target channel, execution mode ('reminder' vs 'agent'), " +
+    "and whether the job is one-shot. " +
+    "IMPORTANT LIFECYCLE RULE: One-shot reminders (e.g. 'tomorrow at 10am') automatically delete themselves " +
+    "from scheduled-jobs.json immediately after firing. Recurring cron jobs (e.g. 'every day at 8am') persist indefinitely.",
+  parameters: ListScheduledJobsParams,
+};
+
+const CancelScheduledJobParams = Type.Object({
+  id: Type.String({
+    description: "The unique ID of the scheduled job to cancel/remove",
+  }),
+});
+
+export const cancelScheduledJobTool: Tool<typeof CancelScheduledJobParams> = {
+  name: "cancel_scheduled_job",
+  description:
+    "Cancel and permanently remove a scheduled reminder or cron job from sessions/scheduled-jobs.json by its job ID.",
+  parameters: CancelScheduledJobParams,
 };
 
 export const sendFileTool: Tool<typeof SendFileParams> = {
@@ -371,6 +408,8 @@ export const allTools: Tool[] = [
   searchMemoryTool,
   rememberTool,
   scheduleReminderTool,
+  listScheduledJobsTool,
+  cancelScheduledJobTool,
   sendMessageTool,
   sendFileTool,
   webSearchTool,
@@ -686,6 +725,78 @@ function executeScheduleReminder(args: Static<typeof ScheduleReminderParams>, co
   const next = job.nextRunAt ? new Date(job.nextRunAt).toISOString() : "soon";
   return {
     content: text(`Scheduled reminder "${message}" (id: ${job.id}) next: ${next}`),
+    isError: false,
+  };
+}
+
+function executeListScheduledJobs(args: Static<typeof ListScheduledJobsParams>, context?: ToolContext): ToolResult {
+  const jobs = listJobs();
+  if (jobs.length === 0) {
+    return {
+      content: text(
+        "No active scheduled jobs or reminders found in sessions/scheduled-jobs.json.\n\n" +
+        "Lifecycle note: One-shot reminders automatically delete themselves from the schedule once they fire. " +
+        "Only recurring cron jobs (e.g. 'every day at 8am') persist after firing."
+      ),
+      isError: false,
+    };
+  }
+
+  const filterChannel = args.channel?.trim();
+  const filtered = filterChannel ? jobs.filter((j) => j.channel.toLowerCase() === filterChannel.toLowerCase()) : jobs;
+
+  if (filtered.length === 0) {
+    return {
+      content: text(
+        `No scheduled jobs found matching channel "${filterChannel}". (${jobs.length} total job(s) exist across other channels).`
+      ),
+      isError: false,
+    };
+  }
+
+  const lines = [
+    `Found ${filtered.length} active scheduled job(s) in sessions/scheduled-jobs.json:`,
+    "",
+    ...filtered.map((j, i) => {
+      const mode = j.mode === "agent" ? "Agent (Autonomous Execution)" : "Reminder (Static Notification)";
+      const type = j.oneShot ? "One-shot (deletes after firing)" : "Recurring Cron";
+      const nextRun = j.nextRunAt ? new Date(j.nextRunAt).toString() : "Not scheduled";
+      const lastRun = j.lastRunAt ? new Date(j.lastRunAt).toString() : "Never";
+      return [
+        `[${i + 1}] "${j.name}" (ID: ${j.id})`,
+        `    Schedule: ${j.cronExpr} (${type})`,
+        `    Next Run: ${nextRun}`,
+        `    Last Run: ${lastRun}`,
+        `    Target: channel=${j.channel} | sender=${j.sender} | mode=${mode}`,
+        `    Message: "${j.message}"`,
+      ].join("\n");
+    }),
+    "",
+    "Note: One-shot reminders are removed automatically once executed. Recurring cron jobs remain active until canceled.",
+  ];
+
+  return {
+    content: text(lines.join("\n")),
+    isError: false,
+  };
+}
+
+function executeCancelScheduledJob(args: Static<typeof CancelScheduledJobParams>): ToolResult {
+  const id = args.id.trim();
+  if (!id) {
+    return { content: text("Missing required job ID in `id`."), isError: true };
+  }
+
+  const removed = removeJob(id);
+  if (!removed) {
+    return {
+      content: text(`No scheduled job found with ID "${id}". Use list_scheduled_jobs to view active job IDs.`),
+      isError: true,
+    };
+  }
+
+  return {
+    content: text(`Successfully canceled and removed scheduled job (ID: ${id}).`),
     isError: false,
   };
 }
@@ -1586,6 +1697,18 @@ registerToolExtension({
 });
 
 registerToolExtension({
+  tool: listScheduledJobsTool,
+  execute: (args, ctx) => executeListScheduledJobs(args, ctx),
+  cliUsage: 'minclaw tool call list_scheduled_jobs',
+});
+
+registerToolExtension({
+  tool: cancelScheduledJobTool,
+  execute: (args) => executeCancelScheduledJob(args),
+  cliUsage: 'minclaw tool call cancel_scheduled_job id="1863fc44-..."',
+});
+
+registerToolExtension({
   tool: sendMessageTool,
   execute: (args, ctx) => executeSendMessage(args, ctx),
   cliUsage: 'minclaw tool call send_message text="Hello from MinClaw"',
@@ -1674,6 +1797,10 @@ export async function executeTool(
       return executeRemember(args as Static<typeof RememberParams>);
     case "schedule_reminder":
       return executeScheduleReminder(args as Static<typeof ScheduleReminderParams>, context);
+    case "list_scheduled_jobs":
+      return executeListScheduledJobs(args as Static<typeof ListScheduledJobsParams>, context);
+    case "cancel_scheduled_job":
+      return executeCancelScheduledJob(args as Static<typeof CancelScheduledJobParams>);
     case "send_message":
       return executeSendMessage(args as Static<typeof SendMessageParams>, context);
     case "send_file":

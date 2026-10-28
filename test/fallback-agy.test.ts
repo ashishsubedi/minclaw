@@ -211,3 +211,54 @@ test("completeFast skips agy provider and uses non-agy model in fallback chain",
   // 3. agy CLI was NOT spawned
   expect(spawnedCalls.length).toBe(spawnedCountBefore);
 });
+
+test("synthesizeFromCapturedTools synthesizes final answer when step cap is reached without textRes", async () => {
+  const { synthesizeFromCapturedTools } = await import("../src/agent.ts");
+
+  mockCompleteSimpleHandler = async (_model: any, context: any) => {
+    const prompt = context.messages[0]?.content || "";
+    if (typeof prompt === "string" && prompt.includes("sessions/scheduled-jobs.json")) {
+      return {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "You have one active recurring schedule: Daily AI Thesis Digest at 8am. Yesterday's one-shot reminders were pruned upon execution.",
+          },
+        ],
+        stopReason: "stop",
+        usage: { input: 100, output: 30, totalTokens: 130 },
+      };
+    }
+    return {
+      role: "assistant",
+      content: [{ type: "text", text: "Synthesized response" }],
+      stopReason: "stop",
+      usage: { input: 50, output: 20, totalTokens: 70 },
+    };
+  };
+
+  const synthesized = await synthesizeFromCapturedTools(
+    {
+      systemPrompt: "You are MinClaw.",
+      messages: [{ role: "user", content: "Can you check my daily schedules?", timestamp: Date.now() }],
+    },
+    [
+      {
+        name: "run_command",
+        input: { CommandLine: "bun run src/cli.ts tool call list_scheduled_jobs" },
+        output: 'Found 1 active scheduled job(s) in sessions/scheduled-jobs.json:\n[1] "Daily AI Thesis Digest" (ID: 1863fc44)',
+      },
+    ],
+    [
+      {
+        provider: "google",
+        apiKey: "mock-google-key",
+        model: { id: "gemini-3.5-flash-lite", name: "gemini-3.5-flash-lite", api: "generate-content" } as any,
+      },
+    ]
+  );
+
+  expect(synthesized).toContain("Daily AI Thesis Digest at 8am");
+  expect(synthesized).toContain("Yesterday's one-shot reminders were pruned upon execution.");
+});

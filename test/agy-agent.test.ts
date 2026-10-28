@@ -261,4 +261,30 @@ Call youtube tool directly.
       expect(filtered).toContain("- **weather**:");
     });
   });
+
+  describe("Step Budgeting & Graceful Post-Cap Synthesis", () => {
+    test("getStepBudget derives hard stop limit and first phase cap properly", async () => {
+      const { getStepBudget } = await import("../src/agent.ts");
+
+      // Default from config (minclaw.json5 has maxToolIterations: 15)
+      const budget1 = getStepBudget();
+      expect(budget1.hardStop).toBe(15);
+      expect(budget1.firstPhase).toBe(7);
+
+      // Custom override (e.g. 20)
+      const budget2 = getStepBudget(20);
+      expect(budget2.hardStop).toBe(20);
+      expect(budget2.firstPhase).toBe(10);
+
+      // Smaller override (e.g. 8)
+      const budget3 = getStepBudget(8);
+      expect(budget3.hardStop).toBe(8);
+      expect(budget3.firstPhase).toBe(4);
+    });
+
+    test("AGY_STATIC_DELEGATION_HEADER instructs agy on list_scheduled_jobs and cancel_scheduled_job", () => {
+      expect(AGY_STATIC_DELEGATION_HEADER).toContain("bun run src/cli.ts tool call list_scheduled_jobs");
+      expect(AGY_STATIC_DELEGATION_HEADER).toContain("bun run src/cli.ts tool call cancel_scheduled_job");
+    });
+  });
 });

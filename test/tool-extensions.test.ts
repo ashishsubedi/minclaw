@@ -46,6 +46,8 @@ describe("Tool Extensions Architecture & Registry", () => {
       "search_memory",
       "remember",
       "schedule_reminder",
+      "list_scheduled_jobs",
+      "cancel_scheduled_job",
       "send_message",
       "send_file",
       "web_search",
@@ -539,5 +541,50 @@ describe("calendar Tool & parseCalendarDateTime", () => {
     expect(parsed.directInProcess).toBe(true);
     expect(parsed.args.action).toBe("create_event");
     expect(parsed.args.summary).toBe("Lunch");
+  });
+});
+
+describe("list_scheduled_jobs & cancel_scheduled_job Tools", () => {
+  test("list_scheduled_jobs returns formatted list of jobs and lifecycle note", async () => {
+    const { setJobsFileForTest, addJob } = await import("../src/scheduler/scheduler.ts");
+    const testFile = `/tmp/test-jobs-${Date.now()}.json`;
+    setJobsFileForTest(testFile);
+
+    // Initial empty list
+    const resEmpty = await executeTool("list_scheduled_jobs", {});
+    expect(resEmpty.isError).toBe(false);
+    expect(resEmpty.content[0]?.text).toContain("No active scheduled jobs or reminders found");
+    expect(resEmpty.content[0]?.text).toContain("One-shot reminders automatically delete themselves");
+
+    // Add a test job
+    const job = addJob({
+      name: "Test Morning Digest",
+      cronExpr: "0 8 * * *",
+      message: "Daily briefing",
+      channel: "telegram",
+      sender: "123456",
+      oneShot: false,
+      mode: "agent",
+    });
+
+    const resFilled = await executeTool("list_scheduled_jobs", {});
+    expect(resFilled.isError).toBe(false);
+    expect(resFilled.content[0]?.text).toContain("Found 1 active scheduled job(s)");
+    expect(resFilled.content[0]?.text).toContain("Test Morning Digest");
+    expect(resFilled.content[0]?.text).toContain(job.id);
+    expect(resFilled.content[0]?.text).toContain("Recurring Cron");
+
+    // Test cancel_scheduled_job with invalid id
+    const resFail = await executeTool("cancel_scheduled_job", { id: "non-existent-id" });
+    expect(resFail.isError).toBe(true);
+    expect(resFail.content[0]?.text).toContain("No scheduled job found with ID");
+
+    // Test cancel_scheduled_job with valid id
+    const resCancel = await executeTool("cancel_scheduled_job", { id: job.id });
+    expect(resCancel.isError).toBe(false);
+    expect(resCancel.content[0]?.text).toContain(`Successfully canceled and removed scheduled job (ID: ${job.id})`);
+
+    // Reset jobs file
+    setJobsFileForTest();
   });
 });

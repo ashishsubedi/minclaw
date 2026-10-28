@@ -31,6 +31,12 @@
 - **Concise Keyword Queries**: SearXNG and detail search engines perform best with keyword-rich phrases rather than conversational questions (e.g., `"Bun spawn pipe stderr"` instead of `"how do I handle stderr piping in Bun spawn?"`).
 - **URL Fetching**: Always verify HTTP response status codes before attempting to parse HTML content.
 
+### 6. Scheduled Jobs & Reminders (`list_scheduled_jobs`, `schedule_reminder`, `cancel_scheduled_job`)
+- **Storage Location**: Scheduled jobs are persisted to `sessions/scheduled-jobs.json` (gitignored).
+- **One-Shot Auto-Pruning Invariant**: One-shot reminders (e.g. `when="tomorrow at 10am"` or `when="in 15m"`) are created with `oneShot: true`. The moment they fire, `scheduler.ts` executes `removeJob(job.id)`, immediately deleting them from `sessions/scheduled-jobs.json`. Only recurring cron jobs (`0 8 * * *`, `oneShot: false`) persist indefinitely.
+- **Fast Single-Step Inspection**: Always use `bun run src/cli.ts tool call list_scheduled_jobs` (or direct tool call `list_scheduled_jobs`) instead of searching files or chat logs.
+- **Cancellation**: Use `bun run src/cli.ts tool call cancel_scheduled_job id="<job-id>"`.
+
 ---
 
 ## 🧠 Environment & Platform Gotchas
