@@ -73,6 +73,15 @@ function startCronForJob(job: ScheduledJob): void {
     activeJobs.get(job.id)!.stop();
   }
 
+  if (!job.cronExpr && job.nextRunAt) {
+    const target = new Date(job.nextRunAt);
+    job.cronExpr = `${target.getMinutes()} ${target.getHours()} ${target.getDate()} ${target.getMonth() + 1} *`;
+  }
+  if (!job.cronExpr) {
+    console.warn(`[scheduler] Skipping job "${job.name}" (${job.id}): missing cronExpr and nextRunAt`);
+    return;
+  }
+
   const cron = new Cron(job.cronExpr, () => {
     console.log(`[scheduler] Firing job: ${job.name} (${job.id})`);
     job.lastRunAt = Date.now();

@@ -401,6 +401,57 @@ export const updateSelfImprovementTool: Tool<typeof UpdateSelfImprovementParams>
   parameters: UpdateSelfImprovementParams,
 };
 
+const WidgetItemSchema = Type.Object({
+  label: Type.String({ description: "Row label or key (e.g. 'Time', 'Location', 'Inbox')" }),
+  value: Type.String({ description: "Row value or description" }),
+  badge: Type.Optional(Type.String({ description: "Optional short pill badge (e.g. '15:00 CET', 'Score 8/10', 'Active')" })),
+  tone: Type.Optional(
+    Type.Unsafe<"default" | "accent" | "success" | "warn" | "danger">({
+      type: "string",
+      enum: ["default", "accent", "success", "warn", "danger"],
+    })
+  ),
+});
+
+const WidgetActionSchema = Type.Object({
+  label: Type.String({ description: "Button label shown to user (e.g. '⚡ 1h + 30m Alerts', '📅 Add to Calendar', '🗑️ Mark Seen')" }),
+  action: Type.String({
+    description:
+      "Action command triggered on tap. Supported fast actions: " +
+      "'double_remind:<ISO_START>:<EVENT_TITLE>' (sets 1h & 30m alerts in both Telegram & Google Calendar), " +
+      "'remind:<MINUTES_BEFORE>:<ISO_START>:<EVENT_TITLE>', " +
+      "'job_delete:<JOB_ID>', 'job_run:<JOB_ID>', " +
+      "'email_seen:<ACCOUNT_ID>_<MSG_ID>', " +
+      "or 'ask:<NATURAL_LANGUAGE_PROMPT>' (triggers an agent turn with that instruction)."
+  }),
+  url: Type.Optional(Type.String({ description: "Optional external URL to open when tapped instead of a callback action" })),
+});
+
+export const SendWidgetParams = Type.Object({
+  title: Type.String({ description: "Widget header title (e.g. '🌅 Morning Briefing', '💉 UdS Flu Vaccination', '💓 Heartbeat Status')" }),
+  subtitle: Type.Optional(Type.String({ description: "Subtitle or timestamp (e.g. 'Tuesday, Nov 10 • 17:07 CET')" })),
+  badge: Type.Optional(Type.String({ description: "Top-right status pill (e.g. 'Healthy', '2 Urgent', 'Confirmed')" })),
+  items: Type.Optional(Type.Array(WidgetItemSchema, { description: "Structured key/value rows rendered in Telegram dark mode" })),
+  customHtml: Type.Optional(
+    Type.String({
+      description:
+        "Optional custom HTML body fragment (styled for dark mode #17212b) if you want a bespoke visual layout (timelines, progress bars, tables, cards). " +
+        "MinClaw wraps this inside the dark-mode Telegram Bot API 10.4 widget shell automatically."
+    })
+  ),
+  actions: Type.Optional(Type.Array(WidgetActionSchema, { description: "Interactive buttons displayed at the bottom of the widget" })),
+  footer: Type.Optional(Type.String({ description: "Optional muted footer note" })),
+});
+
+export const sendWidgetTool: Tool<typeof SendWidgetParams> = {
+  name: "send_widget",
+  description:
+    "Send an interactive Bot API 10.4 Dark-Mode Widget with structured rows, custom HTML visuals, and 1-tap action buttons. " +
+    "On Telegram, renders an inline dark-mode widget card with interactive buttons (e.g. 1-tap dual 1h+30m alerts, email seen, job delete, ask prompts). " +
+    "On other channels (WhatsApp, Slack, Terminal), automatically falls back to a clean structured text summary.",
+  parameters: SendWidgetParams,
+};
+
 export const allTools: Tool[] = [
   shellTool,
   readFileTool,
@@ -412,6 +463,7 @@ export const allTools: Tool[] = [
   cancelScheduledJobTool,
   sendMessageTool,
   sendFileTool,
+  sendWidgetTool,
   webSearchTool,
   webFetchTool,
   emailTool,
@@ -1658,6 +1710,121 @@ export async function executeUpdateSelfImprovement(
   };
 }
 
+function buildWidgetFallbackSummary(args: Static<typeof SendWidgetParams>): string {
+  const lines: string[] = [];
+  const headerParts = [args.title];
+  if (args.badge) headerParts.push(`[${args.badge}]`);
+  lines.push(headerParts.join(" "));
+  if (args.subtitle) {
+    lines.push(args.subtitle);
+  }
+  lines.push("");
+
+  if (args.items && args.items.length > 0) {
+    for (const item of args.items) {
+      const badgeStr = item.badge ? ` (${item.badge})` : "";
+      lines.push(`• ${item.label}: ${item.value}${badgeStr}`);
+    }
+  }
+
+  if (args.footer) {
+    lines.push("");
+    lines.push(args.footer);
+  }
+
+  return lines.join("\n").trim();
+}
+
+export async function executeSendWidget(
+  args: Static<typeof SendWidgetParams>,
+  context?: ToolContext
+): Promise<ToolResult> {
+  const fallbackSummary = buildWidgetFallbackSummary(args);
+  const channel = context?.channel;
+  const sender = channel ? getChannelSender(channel) : undefined;
+  const recipient = context?.sender;
+
+  if (sender && recipient && typeof (sender as any).sendWidget === "function") {
+    try {
+      let buildInteractiveWidget: any;
+      try {
+        // @ts-ignore
+        const mod = await import("./channels/telegram-format.ts");
+        buildInteractiveWidget = mod.buildInteractiveWidget;
+      } catch {
+        // Module not yet loaded or exported differently
+      }
+
+      if (typeof buildInteractiveWidget === "function") {
+        const built = buildInteractiveWidget({
+          title: args.title,
+          subtitle: args.subtitle,
+          badge: args.badge,
+          items: args.items,
+          customHtml: args.customHtml,
+          actions: args.actions,
+          footer: args.footer,
+        });
+
+        await (sender as any).sendWidget({
+          recipient,
+          html: built.html,
+          chatData: built.chatData,
+          fallbackText: built.fallbackHtml || fallbackSummary,
+          buttons: built.buttons,
+        });
+      } else {
+        // Minimal structured fallback if formatter module is unavailable
+        const escapeHtml = (s: string) =>
+          s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const headerHtml = `<b>${escapeHtml(args.title)}</b>${args.badge ? ` [${escapeHtml(args.badge)}]` : ""}${args.subtitle ? `\n<i>${escapeHtml(args.subtitle)}</i>` : ""}`;
+        const itemsHtml = args.items?.map((i) => `• <b>${escapeHtml(i.label)}</b>: ${escapeHtml(i.value)}${i.badge ? ` (<code>${escapeHtml(i.badge)}</code>)` : ""}`).join("\n");
+        const fullHtml = [headerHtml, itemsHtml, args.footer ? `<i>${escapeHtml(args.footer)}</i>` : ""].filter(Boolean).join("\n\n");
+        const buttons = args.actions?.map((a) => [{ label: a.label, action: a.action, url: a.url }]);
+
+        await (sender as any).sendWidget({
+          recipient,
+          html: fullHtml,
+          chatData: { title: args.title },
+          fallbackText: fallbackSummary,
+          buttons,
+        });
+      }
+
+      return {
+        content: text(`Widget "${args.title}" sent to ${recipient} on ${channel}.`),
+        isError: false,
+      };
+    } catch (err: any) {
+      return {
+        content: text(`Error sending widget on ${channel}: ${err.message}`),
+        isError: true,
+      };
+    }
+  }
+
+  // Non-Telegram channels or sender without sendWidget: deliver fallback text if reply is available
+  if (context?.reply) {
+    try {
+      await context.reply(fallbackSummary);
+      return {
+        content: text(`Widget "${args.title}" delivered via fallback text on ${channel || "session"}.`),
+        isError: false,
+      };
+    } catch (err: any) {
+      return {
+        content: text(`Error delivering widget fallback text: ${err.message}`),
+        isError: true,
+      };
+    }
+  }
+
+  return {
+    content: text(fallbackSummary),
+    isError: false,
+  };
+}
+
 // ── Built-in tool extension registrations ─────────────────────────
 
 registerToolExtension({
@@ -1774,6 +1941,12 @@ registerToolExtension({
   cliUsage: 'minclaw tool call update_self_improvement id="si-..." status="completed"',
 });
 
+registerToolExtension({
+  tool: sendWidgetTool,
+  execute: (args, ctx) => executeSendWidget(args, ctx),
+  cliUsage: 'minclaw tool call send_widget title="Morning Briefing" subtitle="Today" items=\'[{"label":"Weather","value":"Sunny 18°C"}]\'',
+});
+
 export async function executeTool(
   name: string,
   args: Record<string, any>,
@@ -1823,6 +1996,8 @@ export async function executeTool(
       return executeQueueSelfImprovement(args as Static<typeof QueueSelfImprovementParams>, context);
     case "update_self_improvement":
       return executeUpdateSelfImprovement(args as Static<typeof UpdateSelfImprovementParams>);
+    case "send_widget":
+      return executeSendWidget(args as Static<typeof SendWidgetParams>, context);
     default:
       return { content: text(`Unknown tool: ${name}`), isError: true };
   }

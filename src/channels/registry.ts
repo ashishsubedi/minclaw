@@ -11,9 +11,33 @@ export type SendTextOptions = {
   text: string;
 };
 
+export type WidgetButtonSpec = {
+  label: string;
+  action: string;
+  url?: string;
+};
+
+export type SendWidgetOptions = {
+  recipient: string;
+  html: string;
+  chatData?: Record<string, unknown>;
+  fallbackText?: string;
+  buttons?: WidgetButtonSpec[][];
+};
+
+export type UpdateWidgetOptions = {
+  recipient: string;
+  messageId: number;
+  chatData: Record<string, unknown>;
+  fallbackText?: string;
+  buttons?: WidgetButtonSpec[][];
+};
+
 export type ChannelSender = {
   sendFile(opts: SendFileOptions): Promise<void>;
   sendText?(opts: SendTextOptions): Promise<void>;
+  sendWidget?(opts: SendWidgetOptions): Promise<{ messageId: number }>;
+  updateWidget?(opts: UpdateWidgetOptions): Promise<void>;
 };
 
 const registry = new Map<string, ChannelSender>();

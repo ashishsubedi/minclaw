@@ -1151,7 +1151,7 @@ export async function runAgent(
 
   const memoryContext = rebuildMemoryIndex();
   const history = getMessages(sessionKey);
-  const systemPrompt = await buildSystemPrompt(config.workspace, memoryContext, sessionKey);
+  const systemPrompt = await buildSystemPrompt(config.workspace, memoryContext, sessionKey, toolContext?.channel);
   const primary = resolvedModels[0];
   const supportsVision = primary.model.input.includes("image");
   const messages = historyToApiMessages(history, userMessage, primary.model.api, primary.provider, supportsVision, attachments);
@@ -1416,7 +1416,7 @@ export async function runAgent(
   };
 }
 
-export async function buildSystemPrompt(workspace: string, memoryContext: string, sessionKey?: string): Promise<string> {
+export async function buildSystemPrompt(workspace: string, memoryContext: string, sessionKey?: string, channel?: string): Promise<string> {
   const [system, channels, memory, skills, operationalMemory] = await Promise.all([
     loadSystemPrompt(workspace),
     loadChannels(),
@@ -1426,6 +1426,20 @@ export async function buildSystemPrompt(workspace: string, memoryContext: string
   ]);
 
   const parts = [system];
+
+  const isTelegram = channel === "telegram" || sessionKey?.startsWith("telegram:");
+  if (isTelegram) {
+    parts.push(
+      `## Active Channel: Telegram (Bot API 10.4 Dark-Mode Widgets Enabled)\n` +
+      `- You are communicating with the user on **Telegram** (dark mode).\n` +
+      `- **Interactive Widgets (\`send_widget\`)**: Prefer calling \`send_widget\` (or combining a concise text reply with \`send_widget\`) whenever presenting:\n` +
+      `  1. **Calendar Events, Appointments & Schedules**: Always include a 1-tap \`double_remind:<ISO_START>:<TITLE>\` button (\`label: "⚡ Set 1h + 30m Alerts"\`) so the user can configure both 1-hour and 30-minute reminders (in Telegram + Google Calendar) with a single tap.\n` +
+      `  2. **Morning Briefings, Heartbeat Status & Reflex Email Triage**: Present structured items (\`items\` or \`customHtml\`) with action buttons (\`email_seen:<ID>\`, \`ask:Read full email from ...\`, \`job_run:<ID>\`, \`job_delete:<ID>\`).\n` +
+      `  3. **Scheduled Jobs & Dashboards**: Allow 1-tap triggering or cancellation of reminders/jobs.\n` +
+      `- When you already sent the complete response via \`send_widget\`, keep your final returned text brief (or avoid duplicating the full widget body in plain text).\n` +
+      `- **Markdown Formatting**: Standard Markdown (\`### Heading\`, \`**bold**\`, \`* bullet\`, \`\` \`code\` \`\`) is automatically converted into native Telegram HTML.`
+    );
+  }
 
   if (sessionKey?.includes("voice")) {
     parts.push(

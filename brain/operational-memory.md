@@ -12,10 +12,11 @@
   `minclaw tool call <tool_name> <arg_name>=<arg_value> ...`
 - Key-value arguments with spaces or special characters MUST be quoted in shell invocations (e.g., `query="search term"`).
 
-### 2. Email Tool (`email`)
-- **Listing Unread**: Use `action=list_unread limit=10` to query unread messages across all configured IMAP accounts.
+### 2. Email Tool (`email`) & Himalaya
+- **Listing Unread**: Use `action=list_unread limit=10` to query unread messages across configured Google accounts.
 - **Reading Emails**: Requires both `id` and `account` parameters (e.g., `action=read id="<message_id>" account="<account_name>"`).
 - **Sending Emails**: Requires `to`, `subject`, and `body` parameters.
+- **University Email (UdS HIZ IMAP)**: Student email (`assu00001@stud.uni-saarland.de`) is routed via Himalaya CLI (`himalaya -a imap_assu00001_stud_uni_saarland_de envelope list / message read <id>`). Note that `~/.config/himalaya/config.toml` requires reading outside the sandboxed workspace.
 - **IMAP Search Nuance**: IMAP servers may return partial headers if envelopes are unread; MinClaw expands envelope fetches and filters out `\Seen` flags locally to ensure accurate triage.
 
 ### 3. Calendar Tool (`calendar`)
@@ -34,8 +35,18 @@
 ### 6. Scheduled Jobs & Reminders (`list_scheduled_jobs`, `schedule_reminder`, `cancel_scheduled_job`)
 - **Storage Location**: Scheduled jobs are persisted to `sessions/scheduled-jobs.json` (gitignored).
 - **One-Shot Auto-Pruning Invariant**: One-shot reminders (e.g. `when="tomorrow at 10am"` or `when="in 15m"`) are created with `oneShot: true`. The moment they fire, `scheduler.ts` executes `removeJob(job.id)`, immediately deleting them from `sessions/scheduled-jobs.json`. Only recurring cron jobs (`0 8 * * *`, `oneShot: false`) persist indefinitely.
+- **Natural Language Parsing**: Use format `at 8pm`, `in 15m`, or `every day at 9am`. Colloquial compounds like `tonight around 8pm` are rejected by the parser; normalize to `at 8pm`.
+- **Arbitrary Calendar Dates**: The default `schedule_reminder` tool only handles relative times and simple day markers (today/tomorrow). For arbitrary future dates (e.g., `"Nov 24 at 2:30pm"`, `"2026-11-24 14:00"`, `"24.11.2026 15:00"`), use the standalone helper script:
+  `bun run scripts/schedule-date-reminder.ts --when="<date/time>" --message="<text>" [--name="<title>"]`
+  which parses natural date strings into ISO timestamps and adds the one-shot job directly into `sessions/scheduled-jobs.json`.
 - **Fast Single-Step Inspection**: Always use `bun run src/cli.ts tool call list_scheduled_jobs` (or direct tool call `list_scheduled_jobs`) instead of searching files or chat logs.
 - **Cancellation**: Use `bun run src/cli.ts tool call cancel_scheduled_job id="<job-id>"`.
+
+### 7. Interactive Widgets (`send_widget`)
+- **CLI String vs Array Arguments**: When invoking `send_widget` via the CLI, argument flags like `items` and `actions` are passed as JSON strings rather than native runtime objects. To prevent crashes or raw string interpolation in fallback text and widget builders, ensure JSON strings are parsed before iterating, or use the dedicated helper script:
+  `bun run scripts/send-widget.ts --title="<title>" --body="<body>" [--items="<json>"] [--actions="<json>"]`
+  which normalizes stringified JSON properties and converts `items` into dark-mode HTML natively if needed.
+- **Action Buttons**: Support interactive commands including `double_remind:<ISO_START>:<TITLE>`, `remind:<MINUTES_BEFORE>:<ISO_START>:<TITLE>`, `job_delete:<JOB_ID>`, `job_run:<JOB_ID>`, `email_seen:<ACCOUNT_ID>_<MSG_ID>`, and `ask:<PROMPT>`.
 
 ---
 

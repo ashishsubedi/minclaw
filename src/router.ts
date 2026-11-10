@@ -138,13 +138,30 @@ export async function handleMessage(
 
   // Run agent
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastStatusText = "";
   let lastStatusAt = 0;
   let statusSent = false;
   const sendStatus = async (statusText: string): Promise<void> => {
     if (msg.channel === "terminal" || msg.channel === "voice" || msg.sender.startsWith("voice")) return;
+    if (statusTimer) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
     const now = Date.now();
-    if (now - lastStatusAt < 3000) return;
+    if (statusText === lastStatusText) return;
+
+    // Distinct tool executions and first update after Thinking are high-value transitions: allow immediately
+    const isNewTool = statusText.startsWith("Running tool:");
+    const isFirstAfterThinking = lastStatusText === "Thinking...";
+    const isToolOrProgress = isNewTool || statusText.startsWith("Status:");
+    const minInterval = isToolOrProgress ? 800 : 2000;
+
+    if (statusSent && !isNewTool && !isFirstAfterThinking && (now - lastStatusAt < minInterval)) {
+      return;
+    }
+
     lastStatusAt = now;
+    lastStatusText = statusText;
     statusSent = true;
     await reply(statusText);
   };
@@ -153,7 +170,7 @@ export async function handleMessage(
     if (msg.channel !== "terminal" && msg.channel !== "voice") {
       statusTimer = setTimeout(() => {
         void sendStatus("Thinking...");
-      }, 1200);
+      }, 1000);
     }
 
     const agentStart = Date.now();
@@ -169,9 +186,6 @@ export async function handleMessage(
         if (onStatus) {
           await onStatus(statusText);
         } else if (msg.channel !== "terminal" && msg.channel !== "voice") {
-          if (!statusSent) {
-            await sendStatus("Working...");
-          }
           await sendStatus(statusText);
         }
       }
@@ -205,7 +219,14 @@ export async function handleMessage(
     });
     appendChat(msg.channel, msg.sender, "assistant", result.text);
 
-    await reply(result.text);
+    const usedSendWidget = result.toolCalls?.some((tc) => tc.name === "send_widget");
+    const cleanText = result.text.trim();
+    if (usedSendWidget && (!cleanText || cleanText === "(no response)")) {
+      // Do not send redundant (no response) bubble, but call reply("") to ensure any HUD is cleaned up
+      await reply("");
+    } else {
+      await reply(result.text);
+    }
 
     // Background auto-compaction with token & turn watermark checks
     void maybeAutoCompactSession(key, { lastInputTokens: result.usage?.input });

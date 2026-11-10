@@ -111,6 +111,7 @@ export type CreateCalendarEventParams = {
   startTime: string;
   endTime?: string;
   accountEmail?: string;
+  reminderMinutes?: number[];
 };
 
 export function parseCalendarDateTime(input: string, fallbackDate: Date = new Date()): Date {
@@ -192,6 +193,21 @@ export async function createCalendarEvent(
   if (params.description) eventPayload.description = params.description;
   if (params.location) eventPayload.location = params.location;
 
+  if (params.reminderMinutes && params.reminderMinutes.length > 0) {
+    eventPayload.reminders = {
+      useDefault: false,
+      overrides: params.reminderMinutes.map((minutes) => ({ method: "popup", minutes })),
+    };
+  } else {
+    eventPayload.reminders = {
+      useDefault: false,
+      overrides: [
+        { method: "popup", minutes: 60 },
+        { method: "popup", minutes: 30 },
+      ],
+    };
+  }
+
   let res = await fetchGoogleWithRetry(url.toString(), {
     method: "POST",
     headers: {
@@ -232,4 +248,87 @@ export async function createCalendarEvent(
     meetLink: item.hangoutLink,
     accountEmail: account.email,
   };
+}
+
+/**
+ * Best-effort helper to apply 60m and 30m popup reminder overrides to an existing upcoming event.
+ * Searches upcoming events for a match on eventTitle or startIso, then patches Google Calendar.
+ */
+export async function applyEventDoubleReminders(eventTitle: string, startIso: string): Promise<string> {
+  try {
+    const accounts = getEmailAccounts().filter((a) => a.type === "google" && a.status === "connected");
+    if (accounts.length === 0) return "No connected Google accounts found.";
+
+    const targetDate = new Date(startIso);
+    const hasValidDate = !isNaN(targetDate.getTime());
+    let timeMinIso: string | undefined;
+    let timeMaxIso: string | undefined;
+    if (hasValidDate) {
+      timeMinIso = new Date(targetDate.getTime() - 60 * 60 * 1000).toISOString();
+      timeMaxIso = new Date(targetDate.getTime() + 60 * 60 * 1000).toISOString();
+    }
+
+    const titleLower = eventTitle.trim().toLowerCase();
+
+    for (const acc of accounts) {
+      try {
+        const events = await listUpcomingCalendarEvents(acc, 20, timeMinIso, timeMaxIso);
+        const match = events.find((e) => {
+          if (titleLower && e.summary.toLowerCase().includes(titleLower)) return true;
+          if (hasValidDate && e.startTime) {
+            const eDate = new Date(e.startTime);
+            if (!isNaN(eDate.getTime()) && Math.abs(eDate.getTime() - targetDate.getTime()) < 5 * 60 * 1000) {
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if (match) {
+          let token = await refreshGoogleAccessToken(acc);
+          const patchUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(match.id)}`;
+          const patchBody = {
+            reminders: {
+              useDefault: false,
+              overrides: [
+                { method: "popup", minutes: 60 },
+                { method: "popup", minutes: 30 },
+              ],
+            },
+          };
+
+          let res = await fetchGoogleWithRetry(patchUrl, {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(patchBody),
+          });
+
+          if (res.status === 401) {
+            token = await refreshGoogleAccessToken(acc, true);
+            res = await fetchGoogleWithRetry(patchUrl, {
+              method: "PATCH",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(patchBody),
+            });
+          }
+
+          if (res.ok) {
+            return `Successfully patched reminders on event: ${match.summary} (${match.id})`;
+          }
+        }
+      } catch (err) {
+        console.warn(`[calendar] applyEventDoubleReminders error for ${acc.email}:`, err);
+      }
+    }
+    return `No matching event found for "${eventTitle}".`;
+  } catch (err) {
+    console.warn(`[calendar] applyEventDoubleReminders error:`, err);
+    return `Failed to apply reminders: ${err instanceof Error ? err.message : String(err)}`;
+  }
 }

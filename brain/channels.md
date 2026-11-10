@@ -60,7 +60,22 @@ Each channel has an `allowFrom` list in `minclaw.json5`. Empty = allow everyone.
 
 ### Telegram
 - Max message length: 4,096 chars per message
-- Supports markdown: bold, italic, code, and code blocks
+- Native HTML conversion: standard Markdown (`### Headings`, `**bold**`, `*italic*`, `~~strike~~`, `[links](url)`, `` `code` ``, ````code blocks````, and lists) is automatically converted into native Telegram HTML entities.
+- **Bot API 10.4 Dark-Mode Interactive Widgets (`send_widget`)**:
+  - Delivers cards styled natively for Telegram dark mode (`#17212b`).
+  - Supports structured key/value item rows, optional custom HTML bodies, and interactive 1-tap inline buttons.
+  - **Supported Action Commands** on button tap:
+    - `double_remind:<ISO_START>:<EVENT_TITLE>`: sets 1h and 30m alerts simultaneously in both Telegram and Google Calendar with one tap.
+    - `remind:<MINUTES_BEFORE>:<ISO_START>:<EVENT_TITLE>`: sets an alert N minutes prior to event start.
+    - `job_delete:<JOB_ID>`: cancels and deletes a scheduled job/reminder.
+    - `job_run:<JOB_ID>`: triggers immediate execution of a scheduled job.
+    - `email_seen:<ACCOUNT_ID>_<MSG_ID>`: marks an email as read/seen.
+    - `ask:<NATURAL_LANGUAGE_PROMPT>`: executes a follow-up agent turn with the given prompt.
+  - **When to Use**:
+    - Calendar events, appointments, and schedules (always offer a 1-tap `double_remind` button).
+    - Morning briefings, heartbeat status updates, and reflex email triage.
+    - Scheduled jobs and dashboard summaries.
+  - When returning a widget, keep accompanying plain text brief to avoid duplicate clutter.
 - Split long responses into multiple messages if needed
 
 ### Slack
