@@ -1,7 +1,20 @@
-import { expect, test, mock } from "bun:test";
+import { expect, test, mock, beforeAll, afterAll } from "bun:test";
 import * as credentials from "../src/auth/credentials.ts";
 import * as piAi from "@mariozechner/pi-ai";
 import * as configLoader from "../src/config.ts";
+
+let originalDisableAcp: string | undefined;
+beforeAll(() => {
+  originalDisableAcp = process.env.MINCLAW_DISABLE_ACP;
+  process.env.MINCLAW_DISABLE_ACP = "1";
+});
+afterAll(() => {
+  if (originalDisableAcp !== undefined) {
+    process.env.MINCLAW_DISABLE_ACP = originalDisableAcp;
+  } else {
+    delete process.env.MINCLAW_DISABLE_ACP;
+  }
+});
 
 // Track spawned commands
 let spawnedCalls: { args: string[]; options?: any }[] = [];
@@ -262,3 +275,67 @@ test("synthesizeFromCapturedTools synthesizes final answer when step cap is reac
   expect(synthesized).toContain("Daily AI Thesis Digest at 8am");
   expect(synthesized).toContain("Yesterday's one-shot reminders were pruned upon execution.");
 });
+
+test("Layer 2: runAgent injects explicit checkpoint message into messages at FIRST_PHASE_CAP", async () => {
+  const { runAgent } = await import("../src/agent.ts");
+
+  let toolIterations = 0;
+  let checkpointMessageSeen: any = null;
+  const statusUpdates: string[] = [];
+
+  mockCompleteSimpleHandler = async (_model: any, context: any) => {
+    // If we've completed 7 tool calls, we should see the checkpoint message
+    if (toolIterations >= 7) {
+      checkpointMessageSeen = context.messages.find(
+        (m: any) =>
+          m.role === "user" &&
+          typeof m.content === "string" &&
+          m.content.includes("[System Notice: Progress Checkpoint]")
+      );
+      return {
+        role: "assistant",
+        content: [{ type: "text", text: "Final converged answer after checkpoint notice." }],
+        stopReason: "stop",
+      };
+    }
+
+    toolIterations++;
+    return {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: `call-${toolIterations}`,
+          name: "remember",
+          arguments: { note: `checkpoint note ${toolIterations}` },
+        },
+      ],
+      stopReason: "toolUse",
+    };
+  };
+
+  const response = await runAgent(
+    "telegram:checkpoint-eval",
+    "Run research and find answers",
+    undefined,
+    undefined,
+    undefined,
+    async (text) => {
+      statusUpdates.push(text);
+    }
+  );
+
+  expect(response.text).toBe("Final converged answer after checkpoint notice.");
+  expect(toolIterations).toBe(7);
+  expect(checkpointMessageSeen).toBeDefined();
+  expect(checkpointMessageSeen.content).toContain("[System Notice: Progress Checkpoint]");
+  expect(checkpointMessageSeen.content).toContain("You have completed 7 tool operations.");
+  expect(checkpointMessageSeen.content).toContain("You have a budget of up to 8 remaining tool operations for this turn.");
+  expect(checkpointMessageSeen.content).toContain(
+    "Please begin converging on your solution, avoid further exploratory retries, and prepare your final synthesized answer."
+  );
+  expect(statusUpdates).toContain(
+    "Progress update: 7 steps completed. Continuing with up to 8 additional steps..."
+  );
+});
+

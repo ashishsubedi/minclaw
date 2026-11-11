@@ -48,6 +48,11 @@
   which normalizes stringified JSON properties and converts `items` into dark-mode HTML natively if needed.
 - **Action Buttons**: Support interactive commands including `double_remind:<ISO_START>:<TITLE>`, `remind:<MINUTES_BEFORE>:<ISO_START>:<TITLE>`, `job_delete:<JOB_ID>`, `job_run:<JOB_ID>`, `email_seen:<ACCOUNT_ID>_<MSG_ID>`, and `ask:<PROMPT>`.
 
+### 8. GitHub CLI (`gh`) & Sandboxed Keychain Isolation
+- **macOS Keychain Isolation**: When executing in a sandboxed daemon process, `gh` cannot access credentials stored in the macOS Keychain (`keyring`), causing `The token in default is invalid` or 401 Unauthorized errors even if `gh auth login` succeeded in the host terminal.
+- **Resolution**: Store `oauth_token` directly in `~/.config/gh/hosts.yml` (under `github.com.oauth_token` and `github.com.users.<user>.oauth_token`). This allows `gh` to authenticate cleanly across all subshells and sandboxed tasks.
+
+
 ---
 
 ## 🧠 Environment & Platform Gotchas

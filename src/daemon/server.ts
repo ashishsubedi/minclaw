@@ -200,8 +200,19 @@ async function handleClientMessage(
         );
       };
 
+      const onChunk = async (chunkText: string) => {
+        socket.write(
+          encode({
+            type: "chat_response",
+            sessionId: msg.sessionId,
+            text: chunkText,
+            done: false,
+          })
+        );
+      };
+
       try {
-        await handleMessage(incoming, reply, onStatus);
+        await handleMessage(incoming, reply, onStatus, onChunk);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         socket.write(encode({ type: "error", message: errMsg }));
@@ -247,8 +258,19 @@ async function handleClientMessage(
         );
       };
 
+      const onChunk = async (chunkText: string) => {
+        socket.write(
+          encode({
+            type: "chat_response",
+            sessionId: msg.sessionId,
+            text: chunkText,
+            done: false,
+          })
+        );
+      };
+
       try {
-        await handleMessage(incoming, reply, onStatus);
+        await handleMessage(incoming, reply, onStatus, onChunk);
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         socket.write(encode({ type: "error", message: errMsg }));
