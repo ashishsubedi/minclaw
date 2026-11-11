@@ -21,6 +21,7 @@ import { getHeartbeatStatus } from "./scheduler/heartbeat.ts";
 import { syncCatalog } from "./skills/catalog.ts";
 import { installSkillByName } from "./skills/installer.ts";
 import { getAllSkillStatuses } from "./skills/loader.ts";
+import { cleanAgentResponse, isRawApiError } from "./network.ts";
 
 /**
  * Detects noise or punctuation-only inputs that contain no letters or numbers.
@@ -218,10 +219,17 @@ export async function handleMessage(
       appendChat(msg.channel, msg.sender, "assistant", `_Tool calls:_\n\n${toolLog}`);
     }
 
+    const sanitizedText = cleanAgentResponse(result.text || "");
+    const finalContent =
+      sanitizedText ||
+      (isRawApiError(result.text)
+        ? "⚠️ I encountered a network connectivity issue while contacting the model server. Please try again."
+        : result.text);
+
     // Save agent response
     appendMessage(key, {
       role: "assistant",
-      content: result.text,
+      content: finalContent,
       timestamp: Date.now(),
       usage: result.usage,
       toolCalls: result.toolCalls?.map((tc) => ({
@@ -230,13 +238,18 @@ export async function handleMessage(
         output: budgetToolOutput(tc.output, 4000),
       })),
     });
-    appendChat(msg.channel, msg.sender, "assistant", result.text);
+    appendChat(msg.channel, msg.sender, "assistant", finalContent);
 
     const usedSendWidget = result.toolCalls?.some((tc) => tc.name === "send_widget");
-    const cleanText = result.text.trim();
+    const cleanText = sanitizedText.trim();
     if (usedSendWidget && (!cleanText || cleanText === "(no response)")) {
       // Do not send redundant (no response) bubble, but call reply("") to ensure any HUD is cleaned up
       await reply("");
+    } else if (cleanText) {
+      await reply(cleanText);
+    } else if (isRawApiError(result.text)) {
+      console.warn(`[router] Suppressed delivering raw API error to ${msg.channel}:${msg.sender}`);
+      await reply("⚠️ I encountered a network connectivity error while contacting the model server. Please try again.");
     } else {
       await reply(result.text);
     }

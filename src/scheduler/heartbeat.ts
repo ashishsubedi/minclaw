@@ -2,6 +2,7 @@ import { Cron } from "croner";
 import { loadHeartbeatPrompt } from "../brain/loader.ts";
 import { loadConfig } from "../config.ts";
 import { runReflexCheck } from "./reflex.ts";
+import { isNetworkAvailable } from "../network.ts";
 
 /**
  * Heartbeat — a recurring cron that triggers the agent to do something.
@@ -47,6 +48,13 @@ export function startHeartbeat(onBeat: HeartbeatCallback): void {
         (async () => {
           const nowIso = new Date().toISOString();
           console.log(`[heartbeat] Beat at ${nowIso}`);
+
+          // 0. Pre-flight network check: skip if device is offline (e.g. clamshell sleep on battery)
+          const online = await isNetworkAvailable();
+          if (!online) {
+            console.log("[heartbeat] Network offline (device sleeping or disconnected). Skipping reflex check and LLM call.");
+            return;
+          }
 
           // 1. Run zero-token reflex check with deferred commits
           const reflex = await runReflexCheck({ deferCommit: true });

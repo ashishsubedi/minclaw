@@ -20,6 +20,7 @@ import { getChannelSender } from "./channels/registry.ts";
 import { getStateDir, ensureStateDir } from "./auth/credentials.ts";
 import { PID_FILENAME } from "./daemon/protocol.ts";
 import { startWebServer } from "./web/server.ts";
+import { isNetworkAvailable, cleanAgentResponse, isRawApiError } from "./network.ts";
 
 /**
  * MinClaw — daemon entry point.
@@ -85,6 +86,12 @@ async function main() {
       };
 
       if (isAgenticJob(job)) {
+        const online = await isNetworkAvailable();
+        if (!online) {
+          console.warn(`[scheduler] Network offline. Skipping agentic scheduled job "${job.name}" (${job.id}).`);
+          return;
+        }
+
         console.log(`[scheduler] Running agentic scheduled job "${job.name}" (${job.id})...`);
         let sentViaTool = false;
         const wrappedReply = async (text: string) => {
@@ -101,10 +108,15 @@ async function main() {
           { channel: job.channel, sender: job.sender }
         );
 
-        if (!sentViaTool && result.text && result.text.trim() && result.text.trim() !== "(no response)") {
-          await replyFn(result.text);
+        const cleanText = cleanAgentResponse(result.text || "");
+        if (!sentViaTool && cleanText && cleanText !== "(no response)") {
+          await replyFn(cleanText);
           console.log(
-            `[scheduler] Delivered agentic output for job "${job.name}" to ${job.channel}:${job.sender} (${result.text.length} chars)`
+            `[scheduler] Delivered agentic output for job "${job.name}" to ${job.channel}:${job.sender} (${cleanText.length} chars)`
+          );
+        } else if (result.text && isRawApiError(result.text)) {
+          console.warn(
+            `[scheduler] Suppressed raw API error for job "${job.name}" from being delivered to ${job.channel}:${job.sender}`
           );
         }
       } else {
@@ -122,6 +134,12 @@ async function main() {
     const owner = currentConfig.owner;
     if (!owner?.recipient) {
       console.log("[heartbeat] No owner recipient configured. Skipping proactive alert.");
+      return;
+    }
+
+    const online = await isNetworkAvailable();
+    if (!online) {
+      console.warn("[heartbeat] Network offline. Skipping agent execution.");
       return;
     }
 
@@ -147,10 +165,15 @@ async function main() {
     );
     console.log(`[heartbeat] Agent: ${result.text.slice(0, 200)}`);
 
-    if (!sentViaTool && result.text && result.text.trim() && result.text.trim() !== "(no response)") {
-      await replyFn(result.text);
+    const cleanText = cleanAgentResponse(result.text || "");
+    if (!sentViaTool && cleanText && cleanText !== "(no response)") {
+      await replyFn(cleanText);
       console.log(
-        `[heartbeat] Delivered proactive update to ${owner.channel}:${owner.recipient} (${result.text.length} chars)`
+        `[heartbeat] Delivered proactive update to ${owner.channel}:${owner.recipient} (${cleanText.length} chars)`
+      );
+    } else if (result.text && isRawApiError(result.text)) {
+      console.warn(
+        `[heartbeat] Suppressed raw API error from being delivered to ${owner.channel}:${owner.recipient}`
       );
     }
   };

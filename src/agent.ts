@@ -14,6 +14,7 @@ import type { Attachment } from "./channels/types.ts";
 import { readImageAsBase64 } from "./media.ts";
 import { allTools, executeTool, type ToolContext } from "./tools.ts";
 import { getGlobalAcpClient } from "./acp/client.ts";
+import { cleanAgentResponse, isRawApiError } from "./network.ts";
 
 export type AgentResponse = {
   text: string;
@@ -44,7 +45,11 @@ export function isTransientAgyError(err: unknown): boolean {
     lower.includes("fetch failed") ||
     lower.includes("premature close") ||
     lower.includes("stream closed") ||
-    lower.includes("network error")
+    lower.includes("network error") ||
+    lower.includes("no such host") ||
+    lower.includes("no route to host") ||
+    lower.includes("stream was interrupted") ||
+    lower.includes("api error")
   );
 }
 
@@ -786,11 +791,19 @@ export async function callModelWithFallback(
           });
 
           if (turnResult.text && turnResult.text.trim()) {
+            const cleaned = cleanAgentResponse(turnResult.text);
+            if (!cleaned || isRawApiError(turnResult.text)) {
+              console.warn(
+                `${logPrefix} ⚠️ agy acp model ${model.id} returned only raw API errors / network socket failures. Falling back.`
+              );
+              throw new Error(`agy acp returned only raw API errors: ${turnResult.text.slice(0, 200)}`);
+            }
+
             console.log(`${logPrefix} ⚡ agy acp model ${model.id} completed`);
             return {
               response: {
                 role: "assistant",
-                content: [{ type: "text", text: turnResult.text.trim() }],
+                content: [{ type: "text", text: cleaned }],
                 api: "agy" as any,
                 provider: "agy",
                 model: model.id,
@@ -1040,6 +1053,9 @@ export async function callModelWithFallback(
               if (code !== 0) {
                 throw new Error(`agy CLI exited with code ${code}: ${stderr || textRes || "Unknown error"}`);
               }
+              if (textRes && isRawApiError(textRes)) {
+                throw new Error(`agy CLI returned only raw API errors / network failure: ${textRes.slice(0, 200)}`);
+              }
             }
 
             // Check emergency hard ceiling watermark:
@@ -1050,9 +1066,10 @@ export async function callModelWithFallback(
               agySessions.delete(sessionKey);
             }
 
+            const cleanedTextRes = cleanAgentResponse(textRes);
             const res: Message = {
               role: "assistant",
-              content: [{ type: "text", text: textRes || "(no response)" }],
+              content: [{ type: "text", text: cleanedTextRes || textRes || "(no response)" }],
               stopReason: "stop",
               usage: agyUsage
                 ? {
@@ -1396,9 +1413,15 @@ export async function runAgent(
     }
 
     if (res.stopReason !== "toolUse") {
-      const text = Array.isArray(res.content)
+      let text = Array.isArray(res.content)
         ? res.content.filter((b) => b.type === "text").map((b) => ("text" in b ? b.text : "")).join("\n") || "(no response)"
         : String(res.content);
+      const cleaned = cleanAgentResponse(text);
+      if (cleaned) {
+        text = cleaned;
+      } else if (isRawApiError(text)) {
+        text = "⚠️ I encountered a network connectivity issue while contacting the model server. Please try again.";
+      }
       const clean = text.trim().replace(/\s+/g, " ");
       console.log(`${logPrefix} 💬 Final response:\n${truncateLog(clean, 4000)}`);
       if (lastUsage) {
