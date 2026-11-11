@@ -7,6 +7,9 @@ import {
   getAgySession,
   killActiveAgyProcesses,
   AGY_STATIC_DELEGATION_HEADER,
+  buildAgyDelegationHeader,
+  getStepBudget,
+  budgetToolOutput,
 } from "../src/agent.ts";
 import type { Message } from "@mariozechner/pi-ai";
 
@@ -285,6 +288,40 @@ Call youtube tool directly.
     test("AGY_STATIC_DELEGATION_HEADER instructs agy on list_scheduled_jobs and cancel_scheduled_job", () => {
       expect(AGY_STATIC_DELEGATION_HEADER).toContain("bun run src/cli.ts tool call list_scheduled_jobs");
       expect(AGY_STATIC_DELEGATION_HEADER).toContain("bun run src/cli.ts tool call cancel_scheduled_job");
+    });
+
+    test("buildAgyPrompt injects dynamic budget and pacing guidance into the delegation prompt header", () => {
+      const budget = getStepBudget();
+      const prompt = buildAgyPrompt({
+        systemPrompt: "MinClaw system prompt",
+        messages: [{ role: "user", content: "Do task", timestamp: Date.now() }],
+      });
+
+      expect(prompt).toContain(`Total Tool Execution Limit: You have a hard budget of up to ${budget.hardStop} tool operations for this turn. At ${budget.hardStop} steps, execution is hard-terminated.`);
+      expect(prompt).toContain(`Phase 1 Checkpoint Target: Aim to solve the task within ${budget.firstPhase} tool steps. At ${budget.firstPhase} tool steps, the agent must begin synthesizing its findings.`);
+      expect(prompt).toContain("If an approach has failed after 2-3 attempts, avoid continuing retry/brute-force loops and instead synthesize what was found");
+      expect(prompt).toContain(`note that at ${budget.hardStop} steps, execution is hard-terminated`);
+    });
+
+    test("buildAgyDelegationHeader formats custom budget dynamically", () => {
+      const header = buildAgyDelegationHeader({ hardStop: 20, firstPhase: 10 });
+      expect(header).toContain("Total Tool Execution Limit: You have a hard budget of up to 20 tool operations for this turn. At 20 steps, execution is hard-terminated.");
+      expect(header).toContain("Phase 1 Checkpoint Target: Aim to solve the task within 10 tool steps. At 10 tool steps, the agent must begin synthesizing its findings.");
+      expect(header).toContain("If an approach has failed after 2-3 attempts, avoid continuing retry/brute-force loops and instead synthesize what was found; note that at 20 steps, execution is hard-terminated.");
+    });
+
+    test("budgetToolOutput handles non-string, object, null, and undefined inputs safely", () => {
+      expect(budgetToolOutput(null)).toBe("");
+      expect(budgetToolOutput(undefined)).toBe("");
+      expect(budgetToolOutput({ status: "success", count: 42 })).toBe('{"status":"success","count":42}');
+      expect(budgetToolOutput(["item1", "item2"])).toBe('["item1","item2"]');
+      expect(budgetToolOutput(12345)).toBe("12345");
+      expect(budgetToolOutput("short text")).toBe("short text");
+      
+      const longText = "a".repeat(5000);
+      const budgeted = budgetToolOutput(longText, 100);
+      expect(budgeted.length).toBeLessThan(5000);
+      expect(budgeted).toContain("[...truncated 4900 chars for context window budget...]");
     });
   });
 });

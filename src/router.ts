@@ -55,7 +55,8 @@ export function isNaturalResetRequest(text: string): boolean {
 export async function handleMessage(
   msg: IncomingMessage,
   reply: ReplyFn,
-  onStatus?: (status: string) => Promise<void> | void
+  onStatus?: (status: string) => Promise<void> | void,
+  onChunk?: (chunk: string) => Promise<void> | void
 ): Promise<void> {
   const key = sessionKeyFromMessage(msg.channel, msg.sender);
   const text = msg.text.trim();
@@ -175,6 +176,17 @@ export async function handleMessage(
 
     const agentStart = Date.now();
     console.log(`[router] 🚀 Running agent for ${msg.channel}:${msg.sender}...`);
+    const chunkHandler = onChunk || (reply as any)?.onChunk;
+    const wrappedChunkHandler = chunkHandler
+      ? async (chunk: string) => {
+          if (statusTimer) {
+            clearTimeout(statusTimer);
+            statusTimer = null;
+          }
+          await chunkHandler(chunk);
+        }
+      : undefined;
+
     const result = await runAgent(
       key,
       agentText,
@@ -188,7 +200,8 @@ export async function handleMessage(
         } else if (msg.channel !== "terminal" && msg.channel !== "voice") {
           await sendStatus(statusText);
         }
-      }
+      },
+      wrappedChunkHandler
     );
     const elapsed = ((Date.now() - agentStart) / 1000).toFixed(1);
     console.log(`[router] ✅ Agent completed response for ${msg.channel}:${msg.sender} (${elapsed}s)`);

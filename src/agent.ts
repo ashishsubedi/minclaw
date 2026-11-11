@@ -13,6 +13,7 @@ import { getMessages, type SessionMessage } from "./session.ts";
 import type { Attachment } from "./channels/types.ts";
 import { readImageAsBase64 } from "./media.ts";
 import { allTools, executeTool, type ToolContext } from "./tools.ts";
+import { getGlobalAcpClient } from "./acp/client.ts";
 
 export type AgentResponse = {
   text: string;
@@ -22,9 +23,11 @@ export type AgentResponse = {
 
 export const AGY_MAX_OBSERVATION_CHARS = 4000;
 
-export function budgetToolOutput(raw: string, maxChars = AGY_MAX_OBSERVATION_CHARS): string {
-  if (!raw || raw.length <= maxChars) return raw;
-  return `${raw.slice(0, maxChars)}\n[...truncated ${raw.length - maxChars} chars for context window budget...]`;
+export function budgetToolOutput(raw: unknown, maxChars = AGY_MAX_OBSERVATION_CHARS): string {
+  if (raw === null || raw === undefined) return "";
+  const str = typeof raw === "string" ? raw : (typeof raw === "object" ? JSON.stringify(raw) : String(raw));
+  if (str.length <= maxChars) return str;
+  return `${str.slice(0, maxChars)}\n[...truncated ${str.length - maxChars} chars for context window budget...]`;
 }
 
 export function isTransientAgyError(err: unknown): boolean {
@@ -381,6 +384,11 @@ export function killActiveAgyProcesses(): void {
 
 export function clearAgySession(sessionKey: string): void {
   agySessions.delete(sessionKey);
+  try {
+    getGlobalAcpClient().clearSession(sessionKey);
+  } catch {
+    // ACP client might not be initialized
+  }
 }
 
 export function getAgySession(sessionKey: string): string | undefined {
@@ -406,7 +414,8 @@ export function getStepBudget(maxIterations?: number): { hardStop: number; first
   return { hardStop, firstPhase };
 }
 
-export const AGY_STATIC_DELEGATION_HEADER = `[MinClaw Autonomous Agent Delegation]
+export function buildAgyDelegationHeader(budget: { hardStop: number; firstPhase: number } = getStepBudget()): string {
+  return `[MinClaw Autonomous Agent Delegation]
 You are being invoked as the autonomous execution agent for MinClaw, a personal AI assistant daemon.
 MinClaw has delegated this request to you as its fallback agent.
 
@@ -431,8 +440,9 @@ Operating Directives:
    - Cancel scheduled job: bun run src/cli.ts tool call cancel_scheduled_job id="<job-id>"
    - Queue self-improvement: bun run src/cli.ts tool call queue_self_improvement title="..." description="..." targetType="skill"
 3. Strict Autonomous Step Budget:
-   - You have an autonomous tool budget per turn (aim for 1-5 tool calls; hard limit enforced by daemon).
-   - Under NO circumstance exceed your step budget. At or before reaching the budget, STOP calling tools and deliver your final synthesized response to the user.
+   - Total Tool Execution Limit: You have a hard budget of up to ${budget.hardStop} tool operations for this turn. At ${budget.hardStop} steps, execution is hard-terminated.
+   - Phase 1 Checkpoint Target: Aim to solve the task within ${budget.firstPhase} tool steps. At ${budget.firstPhase} tool steps, the agent must begin synthesizing its findings.
+   - Pacing & Convergence: If an approach has failed after 2-3 attempts, avoid continuing retry/brute-force loops and instead synthesize what was found; note that at ${budget.hardStop} steps, execution is hard-terminated. Under NO circumstance exceed your step budget. At or before reaching the budget, STOP calling tools and deliver your final synthesized response to the user.
 4. Live Turn Decoupled Self-Improvement:
    - When responding to user interaction, DO NOT read or edit \`src/\` codebase files or run \`bun test\`.
    - Following Google Research's Harness² framework, self-improvement targets execution scaffolding: OpenClaw skills (\`skills/<name>/SKILL.md\` — consult existing \`skills/skill-creator/SKILL.md\` for canonical patterns and structure), standalone helper scripts (\`scripts/<name>.(py|ts|sh)\`), or operational heuristics (\`brain/operational-memory.md\`) rather than mutating core daemon source code (\`src/*.ts\`).
@@ -446,6 +456,9 @@ Operating Directives:
 8. Final Output Delivery: When your tool operations are complete, output your final, concise, helpful response for the user. MinClaw is waiting for your final output and will deliver it directly to the user on their channel.
 9. Operational Memory & Experience Library (Level 2 Experience):
    When you discover enduring platform constraints, tool quirks, or CLI workarounds that future agent sessions must know, record them in \`brain/operational-memory.md\` under the appropriate section (\`## 🛠️ Tool & API Quirks\`, \`## 🧠 Environment & Platform Gotchas\`, or \`## 📜 Golden Operational Patterns\`).`;
+}
+
+export const AGY_STATIC_DELEGATION_HEADER = buildAgyDelegationHeader();
 
 export function filterSystemPromptForAgy(systemPrompt: string): string {
   if (!systemPrompt || !systemPrompt.trim()) return "";
@@ -519,7 +532,9 @@ export function buildAgyPrompt(
   // 3. Static Operational Memory & Runbook (Harness² Level 2 operational heuristics)
   // 4. Dynamic Conversation History (past turns, tool calls/results)
   // 5. Dynamic Current User Request
-  const sections: string[] = [AGY_STATIC_DELEGATION_HEADER];
+  const { hardStop, firstPhase } = getStepBudget();
+  const delegationHeader = buildAgyDelegationHeader({ hardStop, firstPhase });
+  const sections: string[] = [delegationHeader];
 
   if (context.systemPrompt && context.systemPrompt.trim()) {
     const tailoredPrompt = filterSystemPromptForAgy(context.systemPrompt);
@@ -689,7 +704,8 @@ export async function callModelWithFallback(
   context: { systemPrompt: string; messages: Message[]; tools: any[]; operationalMemory?: string },
   options: { temperature?: number; maxTokens?: number },
   sessionKey?: string,
-  status?: (text: string) => Promise<void>
+  status?: (text: string) => Promise<void>,
+  onChunk?: (chunk: string) => Promise<void> | void
 ): Promise<{
   response: Message;
   successfulConfig: ResolvedModel;
@@ -706,6 +722,91 @@ export async function callModelWithFallback(
     debugLog(`Attempting model ${model.id} (provider=${rm.provider}, api=${model.api})`);
     
     if (rm.provider === "agy") {
+      // 1. Try warm ACP first if enabled (default true, can be disabled via MINCLAW_DISABLE_ACP=1)
+      if (process.env.MINCLAW_DISABLE_ACP !== "1") {
+        try {
+          console.log(`${logPrefix} ⚙️ Invoking warm agy ACP daemon with model ${model.id}...`);
+          const acpClient = getGlobalAcpClient();
+          await acpClient.ensureRunning();
+          const isContinuation = acpClient.hasSession(sessionKey || "default");
+          const sessionId = await acpClient.getOrCreateSession(sessionKey || "default", model.id);
+          const promptText = buildAgyPrompt(context, sessionKey, isContinuation);
+
+          let acpToolStepCount = 0;
+          const { hardStop: AGY_HARD_STOP_LIMIT, firstPhase: AGY_FIRST_PHASE_CAP } = getStepBudget();
+          let progressUpdateSent = false;
+          const capturedToolCalls: Array<{ name: string; input: unknown; output: string }> = [];
+
+          const turnResult = await acpClient.runPrompt(sessionId, promptText, {
+            onChunk: async (chunk) => {
+              if (onChunk) await onChunk(chunk);
+            },
+            onThought: async (_thought) => {
+              if (status) await status("Thinking...");
+            },
+            onToolCall: async (call) => {
+              let displayToolName = call.name;
+              if (call.name === "call_mcp_tool" && call.args?.ToolName) {
+                displayToolName = `mcp:${call.args.ToolName}`;
+              } else if (call.name === "run_command" && call.args?.CommandLine) {
+                const firstWord = String(call.args.CommandLine).trim().split(/\s+/)[0];
+                displayToolName = `run_command (${firstWord})`;
+              } else if ((call.name === "read_file" || call.name === "write_file" || call.name === "edit_file") && call.args?.Path) {
+                const baseName = String(call.args.Path).split("/").pop() || "file";
+                displayToolName = `${call.name} (${baseName})`;
+              }
+              const argsPreview = call.args ? ` ${truncateLog(JSON.stringify(call.args), 1000)}` : "";
+              console.log(`${logPrefix} 🔧 agy acp tool: ${call.name}${argsPreview}`);
+              if (status) await status(`Running tool: ${displayToolName}`);
+            },
+            onToolDone: async (call) => {
+              acpToolStepCount++;
+              const outText = typeof call.output === "string" ? call.output : JSON.stringify(call.output ?? "");
+              const outPreview = outText ? ` → ${truncateLog(outText.trim().replace(/\s+/g, " "), 1000)}` : "";
+              console.log(`${logPrefix} 🛠️ agy acp tool done: ${call.name}${outPreview}`);
+              capturedToolCalls.push({
+                name: call.name,
+                input: (call as any).args || {},
+                output: budgetToolOutput(call.output),
+              });
+
+              if (acpToolStepCount === AGY_FIRST_PHASE_CAP && !progressUpdateSent) {
+                progressUpdateSent = true;
+                const remaining = AGY_HARD_STOP_LIMIT - AGY_FIRST_PHASE_CAP;
+                console.log(`${logPrefix} ⏱️ Progress checkpoint: ${AGY_FIRST_PHASE_CAP} tool steps completed. Steering agy via ACP.`);
+                if (status) {
+                  await status(`Progress update: ${AGY_FIRST_PHASE_CAP} steps completed. Continuing with up to ${remaining} additional steps...`);
+                }
+                void acpClient.steer(
+                  sessionId,
+                  `[System Notice: Progress Checkpoint]\nYou have completed ${AGY_FIRST_PHASE_CAP} tool operations. You have a budget of up to ${remaining} remaining tool operations for this turn. Please begin converging on your solution, avoid further exploratory retries, and prepare your final synthesized answer.`
+                );
+              }
+            },
+          });
+
+          if (turnResult.text && turnResult.text.trim()) {
+            console.log(`${logPrefix} ⚡ agy acp model ${model.id} completed`);
+            return {
+              response: {
+                role: "assistant",
+                content: [{ type: "text", text: turnResult.text.trim() }],
+                api: "agy" as any,
+                provider: "agy",
+                model: model.id,
+                stopReason: "stop",
+                timestamp: Date.now(),
+              } as any,
+              successfulConfig: rm,
+              agyToolCalls: capturedToolCalls,
+            };
+          }
+        } catch (acpErr: any) {
+          debugLog(`ACP execution failed, falling back to legacy agy CLI spawn: ${acpErr.message}`);
+        }
+      }
+
+      // 2. Fall back to legacy printmode if ACP fails or is disabled
       for (let agyAttempt = 0; agyAttempt <= 1; agyAttempt++) {
         const attemptLabel = agyAttempt > 0 ? ` (retry ${agyAttempt})` : "";
         console.log(`${logPrefix} ⚙️ Invoking agy CLI with model ${model.id}...${attemptLabel}`);
@@ -788,10 +889,13 @@ export async function callModelWithFallback(
                     } else if (toolName === "run_command" && params?.CommandLine) {
                       const firstWord = String(params.CommandLine).trim().split(/\s+/)[0];
                       displayToolName = `run_command (${firstWord})`;
+                    } else if ((toolName === "read_file" || toolName === "write_file" || toolName === "edit_file") && params?.Path) {
+                      const baseName = String(params.Path).split("/").pop() || "file";
+                      displayToolName = `${toolName} (${baseName})`;
                     }
                     const statusMsg = `Running tool: ${displayToolName}`;
 
-                    const paramsSummary = params ? truncateLog(JSON.stringify(params), 100) : "";
+                    const paramsSummary = params ? truncateLog(JSON.stringify(params), 1000) : "";
                     console.log(`${logPrefix} 🔧 agy tool: ${toolName} ${paramsSummary}`);
                     if (status) {
                       try {
@@ -806,7 +910,7 @@ export async function callModelWithFallback(
                       ? ` (${step.duration_seconds.toFixed(1)}s)`
                       : "";
                     const outText = typeof step.tool_info?.output === "string" ? step.tool_info.output : "";
-                    const outPreview = outText ? ` → ${truncateLog(outText.trim().replace(/\s+/g, " "), 100)}` : "";
+                    const outPreview = outText ? ` → ${truncateLog(outText.trim().replace(/\s+/g, " "), 1000)}` : "";
                     console.log(`${logPrefix} 🛠️ agy tool done: ${toolName}${dur}${outPreview}`);
 
                     capturedToolCalls.push({
@@ -1134,7 +1238,8 @@ export async function runAgent(
   attachments?: Attachment[],
   reply?: (text: string) => Promise<void>,
   toolContextOverride?: { channel: string; sender: string },
-  status?: (text: string) => Promise<void>
+  status?: (text: string) => Promise<void>,
+  onChunk?: (chunk: string) => Promise<void> | void
 ): Promise<AgentResponse> {
   const colonIdx = sessionKey.indexOf(":");
   const toolContext: ToolContext | undefined = toolContextOverride
@@ -1232,6 +1337,11 @@ export async function runAgent(
           debugLog(`status callback error: ${e.message}`);
         }
       }
+      messages.push({
+        role: "user",
+        content: `[System Notice: Progress Checkpoint]\nYou have completed ${FIRST_PHASE_CAP} tool operations. You have a budget of up to ${remaining} remaining tool operations for this turn. Please begin converging on your solution, avoid further exploratory retries, and prepare your final synthesized answer.`,
+        timestamp: Date.now(),
+      });
     }
 
     const { response: res, successfulConfig, agyToolCalls } = await callModelWithFallback(
@@ -1242,7 +1352,8 @@ export async function runAgent(
         temperature: primary.model.reasoning ? undefined : 0.7 
       },
       sessionKey,
-      status
+      status,
+      onChunk
     );
 
     if (agyToolCalls && agyToolCalls.length > 0) {
@@ -1263,7 +1374,7 @@ export async function runAgent(
       for (const block of res.content) {
         if (block.type === "thinking" && block.thinking) {
           const clean = block.thinking.trim().replace(/\s+/g, " ");
-          console.log(`${logPrefix} 🧠 Thinking: ${truncateLog(clean, 180)}`);
+          console.log(`${logPrefix} 🧠 Thinking: ${truncateLog(clean, 1000)}`);
         }
       }
     }
@@ -1273,7 +1384,7 @@ export async function runAgent(
       if (Array.isArray(res.content)) {
         for (const block of res.content) {
           if (block.type === "text") parts.push(block.text);
-          if (block.type === "thinking") parts.push(`[Thinking: ${truncateLog(block.thinking, 100)}]`);
+          if (block.type === "thinking") parts.push(`[Thinking: ${truncateLog(block.thinking, 1000)}]`);
           if (block.type === "toolCall") parts.push(`[Tool Call: ${block.name}(${JSON.stringify(block.arguments)})]`);
         }
       } else {
@@ -1281,7 +1392,7 @@ export async function runAgent(
       }
       
       const responsePreview = parts.join(" ").trim();
-      console.log(`${logPrefix} ${currentModel.id} response (stopReason=${res.stopReason}): ${truncateLog(responsePreview || "(empty)", 300)}`);
+      console.log(`${logPrefix} ${currentModel.id} response (stopReason=${res.stopReason}): ${truncateLog(responsePreview || "(empty)", 1000)}`);
     }
 
     if (res.stopReason !== "toolUse") {
@@ -1289,7 +1400,7 @@ export async function runAgent(
         ? res.content.filter((b) => b.type === "text").map((b) => ("text" in b ? b.text : "")).join("\n") || "(no response)"
         : String(res.content);
       const clean = text.trim().replace(/\s+/g, " ");
-      console.log(`${logPrefix} 💬 Final response: ${truncateLog(clean, 180)}`);
+      console.log(`${logPrefix} 💬 Final response:\n${truncateLog(clean, 4000)}`);
       if (lastUsage) {
         const { cost, costSource, ...u } = lastUsage;
         const costStr = cost?.total ? ` | $${cost.total.toFixed(4)}` : "";
@@ -1325,7 +1436,7 @@ export async function runAgent(
       const toolElapsed = Date.now() - toolStart;
       const resultText = result.content.map((c) => c.text).join("\n");
       const cleanResult = resultText.trim().replace(/\s+/g, " ");
-      console.log(`${logPrefix} ↳ Tool ${call.name} ${result.isError ? "FAILED ❌" : "completed ✅"} (${toolElapsed}ms): ${truncateLog(cleanResult, 140)}`);
+      console.log(`${logPrefix} ↳ Tool ${call.name} ${result.isError ? "FAILED ❌" : "completed ✅"} (${toolElapsed}ms): ${truncateLog(cleanResult, 1000)}`);
 
       toolCallLog.push({ name: call.name, input: call.arguments, output: budgetToolOutput(resultText) });
 
