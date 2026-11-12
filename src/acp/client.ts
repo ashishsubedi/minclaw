@@ -165,10 +165,21 @@ export class ACPClient {
         : modelId.includes("sonnet")
         ? "claude-sonnet-5-5"
         : modelId;
+      const thoughtLevel = modelId.endsWith("-low") || modelId.includes(":low")
+        ? "low"
+        : modelId.endsWith("-high") || modelId.includes(":high")
+        ? "high"
+        : "medium";
+
       await this.sendRequest("session/set_config_option", {
         sessionId,
         configId: "model",
         value: baseModel,
+      });
+      await this.sendRequest("session/set_config_option", {
+        sessionId,
+        configId: "thought_level",
+        value: thoughtLevel,
       });
       this.sessionModels.set(sessionId, modelId);
     }
