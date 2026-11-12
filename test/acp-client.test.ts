@@ -19,14 +19,14 @@ describe("ACPClient", () => {
     expect(initRes.agentInfo?.name).toContain("Antigravity ACP");
   }, 15000);
 
-  it("creates and caches session for a sessionKey", async () => {
+  it("creates and caches session for a sessionKey and configures model", async () => {
     client = new ACPClient();
-    const sessionId1 = await client.getOrCreateSession("test-key-1");
+    const sessionId1 = await client.getOrCreateSession("test-key-1", "gemini-3.8-flash-medium");
     expect(typeof sessionId1).toBe("string");
     expect(sessionId1.length).toBeGreaterThan(10);
 
-    // Second call returns cached sessionId
-    const sessionId2 = await client.getOrCreateSession("test-key-1");
+    // Second call returns cached sessionId and applies new model if changed
+    const sessionId2 = await client.getOrCreateSession("test-key-1", "gemini-3.8-flash-high");
     expect(sessionId2).toBe(sessionId1);
   }, 15000);
 

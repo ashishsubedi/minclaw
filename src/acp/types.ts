@@ -57,6 +57,17 @@ export interface ACPSessionNewParams {
   model?: string;
 }
 
+export interface ACPSessionSetModelParams {
+  sessionId: string;
+  modelId: string;
+}
+
+export interface ACPSessionSetConfigOptionParams {
+  sessionId: string;
+  configId: string;
+  value: string;
+}
+
 export interface ACPSessionNewResult {
   sessionId: string;
   models?: {

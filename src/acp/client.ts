@@ -57,6 +57,7 @@ export class ACPClient {
   private isClosing = false;
   private initPromise: Promise<ACPInitializeResult> | null = null;
   private activeSessions = new Map<string, string>(); // sessionKey -> ACP sessionId
+  private sessionModels = new Map<string, string>(); // sessionId -> configured modelId
   private binaryPath: string;
 
   constructor(binaryPath: string = "agy") {
@@ -118,23 +119,59 @@ export class ACPClient {
 
   /**
    * Obtains or creates an ACP session for the given MinClaw sessionKey.
+   * Ensures the session is explicitly configured with target modelId (defaults to gemini-3.8-flash-medium).
    */
   public async getOrCreateSession(sessionKey: string, modelId?: string): Promise<string> {
     await this.ensureRunning();
 
-    const existing = this.activeSessions.get(sessionKey);
-    if (existing) {
-      return existing;
+    const targetModel = modelId || "gemini-3.8-flash-medium";
+
+    let sessionId = this.activeSessions.get(sessionKey);
+    if (!sessionId) {
+      const res = await this.sendRequest<ACPSessionNewResult>("session/new", {
+        cwd: process.cwd(),
+      });
+      sessionId = res.sessionId;
+      this.activeSessions.set(sessionKey, sessionId);
     }
 
-    const res = await this.sendRequest<ACPSessionNewResult>("session/new", {
-      cwd: process.cwd(),
-      model: modelId,
-    });
+    if (this.sessionModels.get(sessionId) !== targetModel) {
+      await this.setModel(sessionId, targetModel);
+    }
 
-    const sessionId = res.sessionId;
-    this.activeSessions.set(sessionKey, sessionId);
     return sessionId;
+  }
+
+  /**
+   * Configures the active model for an ACP session via session/set_model,
+   * falling back to session/set_config_option if needed.
+   */
+  public async setModel(sessionId: string, modelId: string): Promise<void> {
+    await this.ensureRunning();
+    try {
+      await this.sendRequest("session/set_model", {
+        sessionId,
+        modelId,
+      });
+      this.sessionModels.set(sessionId, modelId);
+    } catch {
+      // Fallback: set via session/set_config_option
+      const baseModel = modelId.includes("flash")
+        ? "gemini-3.8-flash"
+        : modelId.includes("argon")
+        ? "gemini-4-argon"
+        : modelId.includes("opus")
+        ? "claude-opus-5-5"
+        : modelId.includes("sonnet")
+        ? "claude-sonnet-5-5"
+        : modelId;
+      await this.sendRequest("session/set_config_option", {
+        sessionId,
+        configId: "model",
+        value: baseModel,
+      });
+      this.sessionModels.set(sessionId, modelId);
+    }
   }
 
   /**
@@ -148,6 +185,10 @@ export class ACPClient {
    * Clears the cached session ID for a sessionKey (e.g. on /reset).
    */
   public clearSession(sessionKey: string): void {
+    const sessionId = this.activeSessions.get(sessionKey);
+    if (sessionId) {
+      this.sessionModels.delete(sessionId);
+    }
     this.activeSessions.delete(sessionKey);
   }
 
@@ -463,6 +504,7 @@ export class ACPClient {
     this.isInitialized = false;
     this.initPromise = null;
     this.activeSessions.clear();
+    this.sessionModels.clear();
 
     if (this.proc?.stdin) {
       try {
